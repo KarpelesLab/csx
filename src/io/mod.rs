@@ -1,5 +1,6 @@
 //! File formats.
 
+pub mod dom;
 pub mod export;
 pub mod ply;
 pub mod stl;

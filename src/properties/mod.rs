@@ -290,6 +290,8 @@ pub struct Property {
     pub attributes: Vec<(String, String)>,
     /// Unrecognised attributes preserved from files.
     pub extra_attributes: Vec<(String, String)>,
+    /// Unrecognised child elements preserved from files.
+    pub extra_elements: Vec<crate::io::dom::Element>,
 }
 
 impl Property {
@@ -305,6 +307,7 @@ impl Property {
             primitives: Vec::new(),
             attributes: Vec::new(),
             extra_attributes: Vec::new(),
+            extra_elements: Vec::new(),
         }
     }
 

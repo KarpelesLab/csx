@@ -72,6 +72,15 @@ impl<'a> Attrs<'a> {
     }
 }
 
+/// Child elements of `el` whose names are not in `known`, preserved
+/// verbatim for round-tripping.
+fn unknown_children(el: &Element, known: &[&str]) -> Vec<Element> {
+    el.elements()
+        .filter(|c| !known.contains(&c.name.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Splits a comma separated list at commas outside parentheses.
 pub(super) fn split_list(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -226,6 +235,15 @@ pub(super) fn structure(el: &Element) -> Result<ContinuousStructure> {
             s.add_property(property(p, &s.parameters)?);
         }
     }
+    s.extra_elements = unknown_children(
+        el,
+        &[
+            "ParameterSet",
+            "RectilinearGrid",
+            "BackgroundMaterial",
+            "Properties",
+        ],
+    );
     Ok(s)
 }
 
@@ -410,6 +428,17 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
             p.primitives.push(primitive(q, ps)?);
         }
     }
+    let specific: &[&str] = match el.name.as_str() {
+        "Material" | "LorentzMaterial" | "DebyeMaterial" | "DiscMaterial" => {
+            &["Property", "Weight"]
+        }
+        "Excitation" => &["Weight"],
+        "ProbeBox" | "DumpBox" => &["FD_Samples"],
+        _ => &[],
+    };
+    let mut known = vec!["FillColor", "EdgeColor", "Attributes", "Primitives"];
+    known.extend_from_slice(specific);
+    p.extra_elements = unknown_children(el, &known);
     let rest = a.rest();
     match &mut p.kind {
         PropertyKind::DiscMaterial(d) => d.attributes = rest,
@@ -629,6 +658,8 @@ fn polyhedron(el: &Element, ps: &ParameterSet) -> Result<Polyhedron> {
 
 fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
     let a = Attrs::new(el);
+    // Child element a `<Point>` took its coordinates from, if any.
+    let mut point_child: Option<&str> = None;
     let need = |name: &str| -> Result<Scalar> {
         a.scalar(name)
             .ok_or_else(|| Error::Format(format!("<{}> without {name}", el.name)))
@@ -720,11 +751,11 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
         "Point" => {
             let p = if a.get("X").is_some() || a.get("Y").is_some() || a.get("Z").is_some() {
                 point(el)
+            } else if let Some(c) = el.child("Coordinates").or_else(|| el.child("P")) {
+                point_child = Some(c.name.as_str());
+                point(c)
             } else {
-                el.child("Coordinates")
-                    .or_else(|| el.child("P"))
-                    .map(point)
-                    .unwrap_or_default()
+                ScalarPoint::default()
             };
             Shape::Point(PointShape { point: p })
         }
@@ -768,6 +799,20 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
     if let Some(t) = el.child("Transformation") {
         prim.transform = transform(t)?;
     }
+    let specific: &[&str] = match el.name.as_str() {
+        "Box" | "Cylinder" | "CylindricalShell" => &["P1", "P2"],
+        "MultiBox" => &["StartP", "EndP"],
+        "Sphere" | "SphericalShell" => &["Center"],
+        "Polygon" | "LinPoly" | "Curve" | "Wire" => &["Vertex"],
+        "RotPoly" => &["Vertex", "Angles"],
+        "Polyhedron" => &["Vertex", "Face"],
+        "UserDefined" => &["Equation", "Function", "CoordShift", "P0"],
+        _ => &[],
+    };
+    let mut known = vec!["Transformation"];
+    known.extend_from_slice(specific);
+    known.extend(point_child);
+    prim.extra_elements = unknown_children(el, &known);
     prim.extra_attributes = a.rest();
     Ok(prim)
 }

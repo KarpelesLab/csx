@@ -303,6 +303,8 @@ pub struct Primitive {
     pub shape: Shape,
     /// Unrecognised attributes preserved from files.
     pub extra_attributes: Vec<(String, String)>,
+    /// Unrecognised child elements preserved from files.
+    pub extra_elements: Vec<crate::io::dom::Element>,
 }
 
 impl Primitive {
@@ -315,6 +317,7 @@ impl Primitive {
             transform: Transform::new(),
             shape: shape.into(),
             extra_attributes: Vec::new(),
+            extra_elements: Vec::new(),
         }
     }
 

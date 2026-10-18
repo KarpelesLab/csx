@@ -83,6 +83,9 @@ pub(super) fn structure(s: &ContinuousStructure) -> Element {
         props.push(property(p, i));
     }
     el.push(props);
+    for e in &s.extra_elements {
+        el.push(e.clone());
+    }
     el
 }
 
@@ -235,6 +238,7 @@ fn property(p: &Property, index: usize) -> Element {
         prims.push(primitive(q));
     }
     children.push(prims);
+    children.extend(p.extra_elements.iter().cloned());
     for c in children {
         el.push(c);
     }
@@ -398,6 +402,9 @@ fn primitive(p: &Primitive) -> Element {
         }
     }
     extend(&mut el, &p.extra_attributes);
+    for e in &p.extra_elements {
+        el.push(e.clone());
+    }
     el
 }
 

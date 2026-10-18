@@ -415,3 +415,51 @@ fn parametric_polygon_round_trip() {
     );
     assert!(hit.is_some());
 }
+
+#[test]
+fn unknown_children_survive_roundtrip() {
+    let xml = r#"<ContinuousStructure CoordSystem="0">
+  <Properties>
+    <Material Name="m">
+      <Property Epsilon="2"/>
+      <CustomData a="1"><Nested b="2">text &amp; more</Nested></CustomData>
+      <Primitives>
+        <Box Priority="1">
+          <P1 X="0" Y="0" Z="0"/><P2 X="1" Y="1" Z="1"/>
+          <Annotation note="primitive level"/>
+        </Box>
+        <Point X="1" Y="2" Z="3"><P X="9" Y="9" Z="9"/></Point>
+      </Primitives>
+    </Material>
+    <ResBox Name="foreign"><Inner/></ResBox>
+    <ProbeBox Name="p"><Weight X="1"/><Primitives/></ProbeBox>
+  </Properties>
+  <Extension version="2"><Deep><Deeper/></Deep></Extension>
+</ContinuousStructure>"#;
+    let s = ContinuousStructure::from_xml_str(xml).unwrap();
+    assert_eq!(s.extra_elements.len(), 1);
+    assert_eq!(s.extra_elements[0].name, "Extension");
+    let m = s.property_by_name("m").unwrap();
+    assert_eq!(m.extra_elements.len(), 1);
+    assert_eq!(m.extra_elements[0].name, "CustomData");
+    assert_eq!(m.primitives[0].extra_elements[0].name, "Annotation");
+    // `<P>` is unknown when the point uses attributes.
+    assert_eq!(m.primitives[1].extra_elements[0].name, "P");
+    assert_eq!(
+        s.property_by_name("foreign").unwrap().extra_elements[0].name,
+        "Inner"
+    );
+    // Excitation-only children are foreign on other kinds.
+    assert_eq!(
+        s.property_by_name("p").unwrap().extra_elements[0].name,
+        "Weight"
+    );
+
+    let out = s.to_xml_string();
+    let r = ContinuousStructure::from_xml_str(&out).unwrap();
+    assert_eq!(r, s);
+    assert_eq!(r.to_xml_string(), out);
+    let nested = &r.property_by_name("m").unwrap().extra_elements[0];
+    assert_eq!(nested.attr("a"), Some("1"));
+    assert_eq!(nested.child("Nested").unwrap().text(), "text & more");
+}

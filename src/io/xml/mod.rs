@@ -8,7 +8,9 @@
 //! edge colours and its primitives.
 //!
 //! Unknown attributes of properties, primitives and the structure are kept
-//! in `extra_attributes` and written back.
+//! in `extra_attributes`, and unknown child elements in `extra_elements`
+//! (as [`dom::Element`] trees); both are written back. Unknown children are
+//! re-emitted after the known ones.
 //!
 //! # Format notes
 //!
@@ -33,10 +35,9 @@
 //! Property elements with an unknown name are read as
 //! [`PropertyKind::Unknown`](crate::PropertyKind::Unknown) remembering the
 //! element name, and written back under that name with their attributes
-//! (child elements other than colours, attributes and primitives are not
-//! preserved).
+//! and child elements.
 
-pub mod dom;
+pub use super::dom;
 mod fdtd;
 mod read;
 mod write;

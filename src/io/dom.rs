@@ -5,6 +5,11 @@
 //! the predefined and numeric character entities. Whitespace-only text
 //! between elements is dropped. Namespaces and DTD entities are not
 //! interpreted.
+//!
+//! This module is always available (it has no dependencies): the data model
+//! uses [`Element`] to keep unknown XML content of properties, primitives
+//! and structures so it survives a read/write round-trip. The `xml` feature
+//! adds the CSXCAD/openEMS reader and writer on top of it.
 
 use core::fmt::Write as _;
 

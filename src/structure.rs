@@ -101,6 +101,8 @@ pub struct ContinuousStructure {
     pub base_dir: Option<PathBuf>,
     /// Unrecognised attributes preserved from files.
     pub extra_attributes: Vec<(String, String)>,
+    /// Unrecognised child elements preserved from files.
+    pub extra_elements: Vec<crate::io::dom::Element>,
 }
 
 impl ContinuousStructure {
