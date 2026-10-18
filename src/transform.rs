@@ -1,15 +1,47 @@
 //! Affine transformations of primitives.
 //!
-//! A [`Transform`] is an ordered list of elementary operations. Operations
-//! are applied to the primitive's geometry in list order (the first entry is
-//! applied first). Angles are in radians unless the operation was created
-//! with [`Transform::set_angles_in_degrees`] semantics (see below).
+//! A [`Transform`] is an ordered list of elementary [`TransformOp`]s. The
+//! operations are applied to the primitive's geometry in list order — the
+//! first entry is applied first — and always act in Cartesian space, on
+//! drawing-unit coordinates. Rotation angles are in radians unless
+//! [`Transform::set_angles_in_degrees`] was enabled; files always store
+//! radians. Operation arguments are [`Scalar`]s and may therefore be
+//! parametric; [`Transform::update`] re-evaluates them.
+//!
+//! The forward matrix maps local (shape) coordinates to world coordinates;
+//! inside tests use the cached inverse to map query points back.
+//!
+//! ```
+//! use core::f64::consts::FRAC_PI_2;
+//! use csx::{Transform, Vec3};
+//!
+//! let mut t = Transform::new();
+//! // First move 1 along x, then rotate 90° about z.
+//! t.translate(Vec3::new(1.0, 0.0, 0.0)).rotate_axis(2, FRAC_PI_2);
+//!
+//! let p = t.apply(Vec3::ZERO);
+//! assert!((p - Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-12);
+//! assert!(t.apply_inverse(p).norm() < 1e-12);
+//! ```
 
 use crate::error::{Error, Result};
 use crate::math::{Mat4, Vec3};
 use crate::param::{ParameterSet, Scalar};
 
 /// One elementary transformation.
+///
+/// The variant names map to the CSXCAD XML element names returned by
+/// [`TransformOp::name`]; arguments are listed in file order by
+/// [`TransformOp::args`].
+///
+/// ```
+/// use csx::{Scalar, TransformOp};
+///
+/// let op = TransformOp::from_name_args("Translate", [1.0, 2.0, 3.0].map(Scalar::new))?;
+/// assert_eq!(op.name(), "Translate");
+/// assert_eq!(op.args().map(Scalar::value).collect::<Vec<_>>(), [1.0, 2.0, 3.0]);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformOp {
@@ -48,20 +80,29 @@ impl TransformOp {
         }
     }
 
-    /// Arguments in their textual order.
-    pub fn args(&self) -> Vec<&Scalar> {
-        match self {
-            TransformOp::Translate(v) | TransformOp::Scale3(v) => v.iter().collect(),
-            TransformOp::RotateOrigin(v, a) => v.iter().chain(core::iter::once(a)).collect(),
+    /// Arguments in their textual (file) order.
+    pub fn args(&self) -> impl Iterator<Item = &Scalar> + '_ {
+        let (main, extra): (&[Scalar], Option<&Scalar>) = match self {
+            TransformOp::Translate(v) | TransformOp::Scale3(v) => (v, None),
+            TransformOp::RotateOrigin(v, a) => (v, Some(a)),
             TransformOp::RotateX(a)
             | TransformOp::RotateY(a)
             | TransformOp::RotateZ(a)
-            | TransformOp::Scale(a) => vec![a],
-            TransformOp::Matrix(m) => m.iter().collect(),
-        }
+            | TransformOp::Scale(a) => (core::slice::from_ref(a), None),
+            TransformOp::Matrix(m) => (&m[..], None),
+        };
+        main.iter().chain(extra)
     }
 
     /// Builds an operation from its element name and arguments.
+    ///
+    /// Accepted names and argument counts: `Translate` (3), `Rotate_Origin`
+    /// (axis x, y, z, angle), `Rotate_X` / `Rotate_Y` / `Rotate_Z` (1),
+    /// `Scale` or `Scale3` (1 or 3) and `Matrix` (16, row major).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`] for an unknown name or a wrong argument count.
     pub fn from_name_args(
         name: &str,
         args: impl IntoIterator<Item = Scalar>,
@@ -163,6 +204,11 @@ impl Default for Transform {
 
 impl Transform {
     /// Identity transform.
+    ///
+    /// ```
+    /// let t = csx::Transform::new();
+    /// assert!(t.is_empty() && t.matrix().is_identity());
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
@@ -172,7 +218,17 @@ impl Transform {
         self.degrees
     }
 
-    /// Selects degree (`true`) or radian (`false`) rotation angles.
+    /// Selects degree (`true`) or radian (`false`) rotation angles for all
+    /// rotation operations of this transform.
+    ///
+    /// ```
+    /// use csx::{Transform, Vec3};
+    ///
+    /// let mut t = Transform::new();
+    /// t.set_angles_in_degrees(true);
+    /// t.rotate_axis(2, 90.0);
+    /// assert!((t.apply(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
+    /// ```
     pub fn set_angles_in_degrees(&mut self, deg: bool) {
         self.degrees = deg;
         self.rebuild();
@@ -200,7 +256,8 @@ impl Transform {
         self.push(TransformOp::Translate(v.0.map(Scalar::new)))
     }
 
-    /// Appends a rotation about an arbitrary axis through the origin.
+    /// Appends a right-handed rotation about an arbitrary axis through the
+    /// origin (angle unit per [`Transform::angles_in_degrees`]).
     pub fn rotate(&mut self, axis: Vec3, angle: f64) -> &mut Self {
         self.push(TransformOp::RotateOrigin(
             axis.0.map(Scalar::new),
@@ -208,7 +265,9 @@ impl Transform {
         ))
     }
 
-    /// Appends a rotation about the coordinate axis `dir` (0, 1, 2).
+    /// Appends a right-handed rotation about the coordinate axis `dir`
+    /// (0 = x, 1 = y, any other value = z; angle unit per
+    /// [`Transform::angles_in_degrees`]).
     pub fn rotate_axis(&mut self, dir: usize, angle: f64) -> &mut Self {
         let a = Scalar::new(angle);
         self.push(match dir {
@@ -224,6 +283,14 @@ impl Transform {
     }
 
     /// Appends an arbitrary matrix acting on column vectors (`p' = m·p`).
+    ///
+    /// ```
+    /// use csx::{Mat4, Transform, Vec3};
+    ///
+    /// let mut t = Transform::new();
+    /// t.push_matrix(&Mat4::translation(Vec3::new(0.0, 0.0, 5.0)));
+    /// assert_eq!(t.apply(Vec3::ZERO), Vec3::new(0.0, 0.0, 5.0));
+    /// ```
     pub fn push_matrix(&mut self, m: &Mat4) -> &mut Self {
         self.push(TransformOp::Matrix(Box::new(
             m.to_row_major().map(Scalar::new),
@@ -237,6 +304,25 @@ impl Transform {
     }
 
     /// Re-evaluates parametric arguments and rebuilds the matrices.
+    ///
+    /// ```
+    /// use csx::{ParameterSet, Scalar, Transform, TransformOp, Vec3};
+    ///
+    /// let mut t = Transform::new();
+    /// t.push(TransformOp::Translate([Scalar::expr("dx"), 0.0.into(), 0.0.into()]));
+    /// let mut params = ParameterSet::new();
+    /// params.set("dx", 2.5);
+    /// t.update(&params)?;
+    /// assert_eq!(t.apply(Vec3::ZERO), Vec3::new(2.5, 0.0, 0.0));
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Errors from evaluating an argument ([`Error::Parse`],
+    /// [`Error::UnknownVariable`], [`Error::Invalid`] for NaN results), or
+    /// [`Error::Invalid`] when the combined matrix is singular (the
+    /// matrices are rebuilt anyway; see [`Transform::is_invertible`]).
     pub fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.ops.iter_mut().try_for_each(|o| o.update(p))?;
         self.rebuild();
@@ -362,6 +448,6 @@ mod tests {
             vec![0.0.into(), 0.0.into(), 1.0.into(), 2.0.into()],
         )
         .unwrap();
-        assert_eq!(op.args().len(), 4);
+        assert_eq!(op.args().count(), 4);
     }
 }

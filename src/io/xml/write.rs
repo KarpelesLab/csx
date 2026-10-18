@@ -443,7 +443,7 @@ fn transform(t: &Transform) -> Element {
                 rad(a, deg)
             }
             TransformOp::RotateOrigin(v, a) => format!("{},{}", s3(v), rad(a, deg)),
-            _ => join(op.args().into_iter().map(Scalar::to_text)),
+            _ => join(op.args().map(Scalar::to_text)),
         };
         el.push(Element::new(op.name()).with_attr("Argument", arg));
     }

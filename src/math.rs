@@ -1,8 +1,40 @@
 //! Basic linear algebra: 3-vectors, affine 4×4 matrices and bounding boxes.
+//!
+//! * [`Vec3`] — points and directions (components indexed `0..3`, see the
+//!   [axis convention](crate::coords#crate-wide-conventions)).
+//! * [`Mat4`] — affine transformations in homogeneous coordinates, acting
+//!   on column vectors (`p' = M·p`); `a * b` applies `b` first.
+//! * [`BoundingBox`] — closed axis-aligned boxes, with an explicit empty
+//!   value.
+//!
+//! ```
+//! use csx::{BoundingBox, Mat4, Vec3};
+//!
+//! let m = Mat4::translation(Vec3::new(1.0, 0.0, 0.0)) * Mat4::scaling(Vec3::new(2.0, 2.0, 2.0));
+//! // Scale first, then translate.
+//! assert_eq!(m.transform_point(Vec3::new(1.0, 1.0, 1.0)), Vec3::new(3.0, 2.0, 2.0));
+//!
+//! let b = BoundingBox::from_points([Vec3::ZERO, Vec3::new(1.0, 2.0, 3.0)]);
+//! assert_eq!(b.transformed(&m).max, Vec3::new(3.0, 4.0, 6.0));
+//! ```
 
 use core::ops::{Add, AddAssign, Div, Index, IndexMut, Mul, Neg, Sub, SubAssign};
 
 /// A 3-component vector of `f64`, used for points and directions.
+///
+/// Supports the usual arithmetic operators (`+ - * /` with scalars, unary
+/// `-`) and indexing by axis.
+///
+/// ```
+/// use csx::Vec3;
+///
+/// let a = Vec3::new(1.0, 2.0, 2.0);
+/// assert_eq!(a.norm(), 3.0);
+/// assert_eq!(a[2], 2.0);
+/// assert_eq!(a + Vec3::unit(0), Vec3::new(2.0, 2.0, 2.0));
+/// assert_eq!(2.0 * a, a * 2.0);
+/// assert_eq!(Vec3::unit(0).cross(Vec3::unit(1)), Vec3::unit(2));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vec3(pub [f64; 3]);
 
@@ -17,6 +49,10 @@ impl Vec3 {
     }
 
     /// Unit vector along axis `dir` (0 = x, 1 = y, 2 = z).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `dir > 2`.
     #[inline]
     pub fn unit(dir: usize) -> Self {
         let mut v = Vec3::ZERO;
@@ -194,7 +230,23 @@ impl Mul<Vec3> for f64 {
 }
 
 /// A 4×4 matrix in row-major order, used for affine transformations of
-/// homogeneous coordinates (`p' = M · [p, 1]`).
+/// homogeneous coordinates (`p' = M · [p, 1]`). The translation lives in the
+/// last column. `a * b` is the matrix product, i.e. the transformation that
+/// applies `b` first and then `a`.
+///
+/// ```
+/// use core::f64::consts::FRAC_PI_2;
+/// use csx::{Mat4, Vec3};
+///
+/// let r = Mat4::rotation(Vec3::unit(2), FRAC_PI_2);
+/// assert!((r.transform_point(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
+/// // Directions ignore the translation part.
+/// let t = Mat4::translation(Vec3::new(5.0, 0.0, 0.0));
+/// assert_eq!(t.transform_vector(Vec3::unit(1)), Vec3::unit(1));
+/// let inv = (t * r).inverse().unwrap();
+/// let p = Vec3::new(0.3, -2.0, 1.0);
+/// assert!((inv.transform_point((t * r).transform_point(p)) - p).norm() < 1e-12);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mat4(pub [[f64; 4]; 4]);
 
@@ -271,7 +323,8 @@ impl Mat4 {
         }))
     }
 
-    /// Transforms a point (w = 1).
+    /// Transforms a point (w = 1). Projective matrices (last row not
+    /// `0 0 0 1`) divide by the resulting `w` unless it is 0 or 1.
     #[inline]
     pub fn transform_point(&self, p: Vec3) -> Vec3 {
         let m = &self.0;
@@ -299,6 +352,13 @@ impl Mat4 {
 
     /// General 4×4 inverse via Gauss–Jordan elimination with partial
     /// pivoting. Returns `None` for (numerically) singular matrices.
+    ///
+    /// ```
+    /// use csx::{Mat4, Vec3};
+    ///
+    /// assert!(Mat4::scaling(Vec3::new(2.0, 4.0, 1.0)).inverse().is_some());
+    /// assert!(Mat4::scaling(Vec3::new(1.0, 0.0, 1.0)).inverse().is_none());
+    /// ```
     pub fn inverse(&self) -> Option<Mat4> {
         let mut a = self.0;
         let mut inv = Mat4::IDENTITY.0;
@@ -349,7 +409,25 @@ impl Mul for Mat4 {
     }
 }
 
-/// An axis-aligned bounding box. An *empty* box has `min > max`.
+/// An axis-aligned bounding box. An *empty* box has `min > max` on some
+/// axis (see [`BoundingBox::EMPTY`]); a box may be degenerate (zero extent)
+/// along any axis, e.g. for sheets. Containment tests are closed (boundary
+/// points are inside).
+///
+/// ```
+/// use csx::{BoundingBox, Vec3};
+///
+/// let mut b = BoundingBox::EMPTY;
+/// assert!(b.is_empty());
+/// b.include(Vec3::new(0.0, 0.0, 1.0));
+/// b.include(Vec3::new(2.0, 1.0, 1.0));
+/// assert_eq!(b.dimension(), 2); // flat in z
+/// assert!(b.contains(Vec3::new(2.0, 0.5, 1.0)));
+/// assert_eq!(b.center(), Vec3::new(1.0, 0.5, 1.0));
+/// let other = BoundingBox::from_corners(Vec3::new(1.0, 0.0, 0.0), Vec3::new(5.0, 5.0, 5.0));
+/// assert!(b.intersects(&other));
+/// assert_eq!(b.intersection(&other).min, Vec3::new(1.0, 0.0, 1.0));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoundingBox {
     /// Lower corner.

@@ -1,8 +1,26 @@
 //! Error type.
+//!
+//! Every fallible operation of the crate returns [`Result`], whose error is
+//! the single [`Error`] enum. Errors carry human readable messages; match on
+//! the variant to distinguish causes.
+//!
+//! ```
+//! use csx::{Error, ParameterSet};
+//!
+//! let params = ParameterSet::new();
+//! match params.eval("width * 2") {
+//!     Err(Error::UnknownVariable(name)) => assert_eq!(name, "width"),
+//!     other => panic!("unexpected {other:?}"),
+//! }
+//! assert!(matches!(params.eval("1 +"), Err(Error::Parse { .. })));
+//! ```
 
 use core::fmt;
 
 /// Errors produced by this crate.
+///
+/// `#[non_exhaustive]`: new variants may be added; match with a wildcard
+/// arm.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -22,7 +40,8 @@ pub enum Error {
     Invalid(String),
     /// Malformed or unsupported file content.
     Format(String),
-    /// I/O failure (message of the underlying error).
+    /// I/O failure (message of the underlying [`std::io::Error`], which is
+    /// converted by `?`).
     Io(String),
 }
 
@@ -48,5 +67,5 @@ impl From<std::io::Error> for Error {
     }
 }
 
-/// Convenience alias.
+/// `Result` with [`Error`] as the default error type.
 pub type Result<T, E = Error> = core::result::Result<T, E>;

@@ -5,6 +5,26 @@
 //! value is a [`Scalar`]: it remembers the expression and caches its last
 //! evaluated value. [`crate::ContinuousStructure::update`] re-evaluates every
 //! scalar against the structure's [`ParameterSet`].
+//!
+//! The expression syntax is described in [`crate::expr`].
+//!
+//! ```
+//! use csx::{ParameterSet, Scalar};
+//!
+//! let mut params = ParameterSet::new();
+//! params.set("substrate_h", 1.6);
+//!
+//! let mut half = Scalar::expr("substrate_h / 2");
+//! assert!(half.value().is_nan()); // not evaluated yet
+//! half.update(&params)?;
+//! assert_eq!(half.value(), 0.8);
+//!
+//! params.set("substrate_h", 0.8);
+//! half.update(&params)?;
+//! assert_eq!(half.value(), 0.4);
+//! assert_eq!(half.to_text(), "substrate_h / 2"); // the expression is kept
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use core::fmt;
 
@@ -12,6 +32,14 @@ use crate::error::{Error, Result};
 use crate::expr::{Expr, parse_number, parse_number_lenient};
 
 /// How a parameter is swept (informational; used by sweep front-ends).
+///
+/// ```
+/// use csx::param::{Parameter, ParameterKind};
+///
+/// let mut p = Parameter::new("f", 1e9);
+/// p.kind = ParameterKind::Linear { start: 1e9, stop: 2e9, step: 0.5e9 };
+/// assert!(matches!(p.kind, ParameterKind::Linear { .. }));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ParameterKind {
     /// A constant value.
@@ -29,6 +57,11 @@ pub enum ParameterKind {
 }
 
 /// A named parameter.
+///
+/// ```
+/// let p = csx::Parameter::new("w", 2.0);
+/// assert_eq!((p.name.as_str(), p.value, p.sweep), ("w", 2.0, true));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     /// Name, usable in expressions.
@@ -53,7 +86,22 @@ impl Parameter {
     }
 }
 
-/// An ordered collection of uniquely named parameters.
+/// An ordered collection of uniquely named parameters, used to evaluate
+/// parametric values.
+///
+/// ```
+/// use csx::ParameterSet;
+///
+/// let mut ps = ParameterSet::new();
+/// ps.set("w", 2.0);
+/// ps.set("l", 3.0);
+/// ps.set("w", 4.0); // replaces the value
+/// assert_eq!(ps.len(), 2);
+/// assert_eq!(ps.get("w"), Some(4.0));
+/// assert_eq!(ps.eval("w * l")?, 12.0);
+/// assert_eq!(ps.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["w", "l"]);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParameterSet {
     params: Vec<Parameter>,
@@ -112,7 +160,14 @@ impl ParameterSet {
         self.params.is_empty()
     }
 
-    /// Evaluates an expression string against this set.
+    /// Evaluates an expression string against this set (plain numbers are
+    /// parsed directly). Names that are not parameters fall back to the
+    /// built-in constants `pi` and `e`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] for a syntax error and [`Error::UnknownVariable`]
+    /// for a name that is neither a parameter nor a constant.
     pub fn eval(&self, expr: &str) -> Result<f64> {
         if let Some(v) = parse_number(expr) {
             return Ok(v);
@@ -128,6 +183,21 @@ impl ParameterSet {
 ///
 /// Equality compares the expression and the cached value, treating two NaN
 /// values (unset or not yet evaluated) as equal.
+///
+/// NaN is also how "unset" values are represented (e.g. an unspecified
+/// lumped-element capacitance); see [`Scalar::is_unset`].
+///
+/// ```
+/// use csx::Scalar;
+///
+/// let c = Scalar::new(1.5);
+/// assert_eq!((c.value(), c.is_expr()), (1.5, false));
+/// let e = Scalar::expr("2*pi");
+/// assert!(e.is_expr());
+/// assert!((e.value() - core::f64::consts::TAU).abs() < 1e-15); // constant: evaluated now
+/// assert_eq!(Scalar::from("3.25"), Scalar::new(3.25)); // plain numbers stay constants
+/// assert_eq!(e.to_string(), "2*pi");
+/// ```
 #[derive(Debug, Clone)]
 pub struct Scalar {
     expr: Option<Box<str>>,
@@ -169,6 +239,15 @@ impl Scalar {
     }
 
     /// Like [`Scalar::expr`] but validates the syntax.
+    ///
+    /// ```
+    /// assert!(csx::Scalar::try_expr("w/2").is_ok());
+    /// assert!(csx::Scalar::try_expr("w/").is_err());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] if `src` is neither a number nor a valid expression.
     pub fn try_expr(src: &str) -> Result<Self> {
         if parse_number_lenient(src).is_none() {
             Expr::parse(src)?;
@@ -180,6 +259,12 @@ impl Scalar {
     #[inline]
     pub fn value(&self) -> f64 {
         self.value
+    }
+
+    /// True if the cached value is NaN, i.e. the value is unset or an
+    /// expression has not been evaluated successfully yet.
+    pub fn is_unset(&self) -> bool {
+        self.value.is_nan()
     }
 
     /// Expression source, if this scalar is parametric.
@@ -197,7 +282,13 @@ impl Scalar {
         *self = Scalar::new(v);
     }
 
-    /// Re-evaluates the expression (if any) against `params`.
+    /// Re-evaluates the expression (if any) against `params`. Constants are
+    /// left untouched.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`ParameterSet::eval`], and [`Error::Invalid`] if the
+    /// expression evaluates to NaN. The cached value is unchanged on error.
     pub fn update(&mut self, params: &ParameterSet) -> Result<()> {
         if let Some(e) = &self.expr {
             let v = params.eval(e)?;
@@ -236,7 +327,17 @@ impl fmt::Display for Scalar {
     }
 }
 
-/// Formats a float with the shortest representation that round-trips.
+/// Formats a float with the shortest representation that round-trips
+/// (`nan`, `inf`, `-inf` for non-finite values), as written to files.
+///
+/// ```
+/// use csx::param::format_f64;
+///
+/// assert_eq!(format_f64(0.5), "0.5");
+/// assert_eq!(format_f64(1e-12), "1e-12");
+/// assert_eq!(format_f64(f64::NAN), "nan");
+/// assert_eq!(format_f64(0.1).parse::<f64>().unwrap(), 0.1);
+/// ```
 pub fn format_f64(v: f64) -> String {
     if v.is_nan() {
         return "nan".into();
@@ -254,6 +355,19 @@ pub fn format_f64(v: f64) -> String {
 }
 
 /// A point whose three coordinates are [`Scalar`]s.
+///
+/// ```
+/// use csx::{ParameterSet, ScalarPoint, Vec3};
+///
+/// let mut p = ScalarPoint::from(["w", "0", "h/2"]);
+/// let mut params = ParameterSet::new();
+/// params.set("w", 3.0);
+/// params.set("h", 1.0);
+/// p.update(&params)?;
+/// assert_eq!(p.value(), Vec3::new(3.0, 0.0, 0.5));
+/// assert_eq!(ScalarPoint::from([1.0, 2.0, 3.0]).value(), Vec3::new(1.0, 2.0, 3.0));
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ScalarPoint(pub [Scalar; 3]);
 
@@ -270,6 +384,10 @@ impl ScalarPoint {
     }
 
     /// Re-evaluates all coordinates.
+    ///
+    /// # Errors
+    ///
+    /// The first error of [`Scalar::update`] on any coordinate.
     pub fn update(&mut self, params: &ParameterSet) -> Result<()> {
         self.0.iter_mut().try_for_each(|s| s.update(params))
     }

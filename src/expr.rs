@@ -1,20 +1,77 @@
 //! Mathematical expressions.
 //!
-//! The accepted syntax follows the conventions of the classic "function
-//! parser" dialect used by CSXCAD files:
+//! Values in CSXCAD models (coordinates, material parameters, weighting
+//! functions, ...) may be written as expressions over named parameters and,
+//! for weighting functions, over coordinate variables. The accepted syntax
+//! follows the "function parser" dialect used by CSXCAD files.
 //!
-//! * numbers: `1`, `2.5`, `.5`, `1e-3`
-//! * operators, lowest to highest precedence:
-//!   `|`, `&`, comparisons (`=`, `==`, `!=`, `<`, `<=`, `>`, `>=`), `+ -`,
-//!   `* / %`, unary `-`/`!`, `^` (right associative, binds tighter than unary
-//!   minus so `-2^2 = -4`)
-//! * functions: `abs acos acosh asin asinh atan atan2 atanh cbrt ceil cos
-//!   cosh cot csc exp exp2 floor hypot if int log log2 log10 max min not pow
-//!   sec sin sinh sqrt tan tanh trunc`, plus the Bessel functions `j0 j1
-//!   jn y0 y1 yn` (`jn(n, x)`, `yn(n, x)` with integer order `n`)
-//! * constants `pi` and `e` (overridable by variables / parameters)
+//! [`Expr::parse`] produces an [`Expr`] that can be evaluated with any name
+//! lookup; [`Expr::compile`] binds names once and yields a [`CompiledExpr`]
+//! for fast repeated evaluation (e.g. per mesh cell).
 //!
-//! Booleans are `1` / `0`; any non-zero value is *true* (NaN is false).
+//! ```
+//! use csx::expr::Expr;
+//!
+//! let e = Expr::parse("a * sin(x) + 1")?;
+//! assert_eq!(e.names().into_iter().collect::<Vec<_>>(), ["a", "x"]);
+//!
+//! // Ad-hoc evaluation with a closure resolving names.
+//! let v = e.eval_with(|n| match n { "a" => Some(2.0), "x" => Some(0.0), _ => None })?;
+//! assert_eq!(v, 1.0);
+//!
+//! // Compile once: `x` becomes argument 0, `a` is folded to a constant.
+//! let f = e.compile(&["x"], |n| (n == "a").then_some(2.0))?;
+//! assert!((f.eval(&[core::f64::consts::FRAC_PI_2]) - 3.0).abs() < 1e-12);
+//! # Ok::<(), csx::Error>(())
+//! ```
+//!
+//! # Syntax
+//!
+//! **Numbers**: `1`, `2.5`, `.5`, `1e-3`, `6.02E23`.
+//!
+//! **Operators**, from lowest to highest precedence:
+//!
+//! | precedence | operators | notes |
+//! |---|---|---|
+//! | 1 | `a \| b` | logical or (short-circuit) |
+//! | 2 | `a & b` | logical and (short-circuit) |
+//! | 3 | `=` / `==`, `!=`, `<`, `<=`, `>`, `>=` | comparisons, result `1` or `0` |
+//! | 4 | `+`, `-` | left associative |
+//! | 5 | `*`, `/`, `%` | left associative; `%` is the floating remainder |
+//! | 6 | unary `-`, `+`, `!` | `!x` is logical not |
+//! | 7 | `^` | power, right associative, binds tighter than unary minus: `-2^2 = -4`, `2^-1 = 0.5` |
+//!
+//! Parentheses group as usual; there is no nesting limit.
+//!
+//! **Functions** (`name(args)`, fixed arity):
+//!
+//! | functions | meaning |
+//! |---|---|
+//! | `abs ceil floor trunc` | rounding / magnitude |
+//! | `int(x)` | round to nearest |
+//! | `sqrt cbrt exp exp2 log log2 log10` | `log` is the natural logarithm |
+//! | `pow(x, y)`, `hypot(x, y)` | `xʸ`, `√(x²+y²)` |
+//! | `min(a, b)`, `max(a, b)` | |
+//! | `sin cos tan cot sec csc` | trigonometry, radians |
+//! | `asin acos atan atan2(y, x)` | inverse trigonometry |
+//! | `sinh cosh tanh asinh acosh atanh` | hyperbolic |
+//! | `j0 j1 jn(n, x)` | Bessel functions of the first kind |
+//! | `y0 y1 yn(n, x)` | Bessel functions of the second kind (NaN for `x < 0`) |
+//! | `if(c, a, b)` | `a` if `c` is true else `b`; only the taken branch is evaluated |
+//! | `not(x)` | logical not |
+//!
+//! **Constants**: `pi` and `e`. They are only used when the name is not
+//! resolved otherwise, so a parameter or variable named `e` shadows Euler's
+//! number.
+//!
+//! **Truth values**: logical operators return `1` or `0`. Any non-zero
+//! value is *true*; `0` and NaN are *false*.
+//!
+//! **NaN**: arithmetic follows IEEE 754 (e.g. `0/0` and `sqrt(-1)` are NaN).
+//! Contexts that need a definite number reject NaN results (see
+//! [`crate::Scalar::update`]).
+//!
+//! # Implementation
 //!
 //! Expressions compile to flat postfix programs evaluated with an explicit
 //! value stack, so there is no limit on nesting depth (memory use is linear
@@ -402,7 +459,20 @@ fn builtin_constant(name: &str) -> Option<f64> {
     }
 }
 
-/// A parsed expression.
+/// A parsed expression; see the [module documentation](self) for the
+/// syntax.
+///
+/// `Expr` implements [`FromStr`](core::str::FromStr) and displays as its
+/// source text.
+///
+/// ```
+/// use csx::expr::Expr;
+///
+/// let e: Expr = "if(x > 0, x, -x)".parse()?;
+/// assert_eq!(e.eval_with(|_| Some(-3.0))?, 3.0);
+/// assert_eq!(e.to_string(), "if(x > 0, x, -x)");
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     src: String,
@@ -413,7 +483,20 @@ pub struct Expr {
 impl Expr {
     /// Parses `src`. There is no limit on nesting depth: parsing and
     /// evaluation use explicit stacks, so memory use is linear in the input
-    /// length.
+    /// length. Names are not resolved at this point.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] with the byte offset of the first syntax error
+    /// (unexpected character or end of input, unknown function, wrong
+    /// argument count, unbalanced parentheses).
+    ///
+    /// ```
+    /// use csx::{expr::Expr, Error};
+    ///
+    /// assert!(matches!(Expr::parse("sin(1, 2)"), Err(Error::Parse { .. })));
+    /// assert!(matches!(Expr::parse("(1 + 2"), Err(Error::Parse { pos: 6, .. })));
+    /// ```
     pub fn parse(src: &str) -> Result<Expr> {
         let mut names: Vec<String> = Vec::new();
         let code = Parser::new(src).parse(&mut |n: &str| {
@@ -438,7 +521,8 @@ impl Expr {
         &self.src
     }
 
-    /// Names referenced by the expression (excluding function names).
+    /// Names referenced by the expression (excluding function names), in
+    /// sorted order.
     pub fn names(&self) -> BTreeSet<&str> {
         self.names.iter().map(String::as_str).collect()
     }
@@ -446,6 +530,20 @@ impl Expr {
     /// Evaluates the expression; names are resolved by `lookup`, falling
     /// back to the built-in constants. Names are only resolved when they are
     /// actually evaluated (e.g. in the taken branch of `if`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`] naming an evaluated name that neither
+    /// `lookup` nor the built-in constants resolve.
+    ///
+    /// ```
+    /// use csx::expr::Expr;
+    ///
+    /// let e = Expr::parse("if(1, 2, unknown)")?;
+    /// assert_eq!(e.eval_with(|_| None)?, 2.0); // `unknown` is never evaluated
+    /// assert!(Expr::parse("unknown")?.eval_with(|_| None).is_err());
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     pub fn eval_with(&self, mut lookup: impl FnMut(&str) -> Option<f64>) -> Result<f64> {
         let mut missing = 0;
         self.prog
@@ -460,7 +558,19 @@ impl Expr {
             .ok_or_else(|| Error::UnknownVariable(self.names[missing as usize].clone()))
     }
 
-    /// Evaluates an expression without any variables.
+    /// Evaluates an expression without any variables (only the built-in
+    /// constants are available).
+    ///
+    /// ```
+    /// let v = csx::expr::Expr::parse("2^10 - max(3, 4)")?.eval_const()?;
+    /// assert_eq!(v, 1020.0);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`] if the expression evaluates any name other
+    /// than `pi` or `e`.
     pub fn eval_const(&self) -> Result<f64> {
         self.eval_with(|_| None)
     }
@@ -470,6 +580,24 @@ impl Expr {
     /// names are resolved once through `lookup` (then built-in constants) and
     /// constant sub-expressions are folded. Every name must resolve, even in
     /// branches that are never taken.
+    ///
+    /// ```
+    /// use csx::expr::Expr;
+    ///
+    /// let e = Expr::parse("k * (x + y)")?;
+    /// let f = e.compile(&["x", "y"], |n| (n == "k").then_some(10.0))?;
+    /// assert_eq!(f.eval(&[1.0, 2.0]), 30.0);
+    /// assert_eq!(f.as_constant(), None);
+    ///
+    /// let c = Expr::parse("k * 2")?.compile(&[], |_| Some(4.0))?;
+    /// assert_eq!(c.as_constant(), Some(8.0));
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`] for a name that is neither in `vars`, nor
+    /// resolved by `lookup`, nor a built-in constant.
     pub fn compile(
         &self,
         vars: &[&str],
@@ -504,7 +632,8 @@ impl core::fmt::Display for Expr {
 }
 
 /// An expression whose free names were bound to positional slots or folded
-/// to constants; see [`Expr::compile`].
+/// to constants; see [`Expr::compile`]. Evaluation is infallible: the result
+/// is a plain `f64` (possibly NaN).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledExpr {
     prog: Program,
@@ -975,8 +1104,16 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Parses `s` as a plain floating point number, accepting surrounding
-/// whitespace. Returns `None` when `s` is not a bare number.
+/// Parses `s` as a plain finite floating point number, accepting
+/// surrounding whitespace. Returns `None` when `s` is not a bare number.
+///
+/// ```
+/// use csx::expr::parse_number;
+///
+/// assert_eq!(parse_number(" -1.5e3 "), Some(-1500.0));
+/// assert_eq!(parse_number("2*3"), None);
+/// assert_eq!(parse_number("inf"), None);
+/// ```
 pub fn parse_number(s: &str) -> Option<f64> {
     let t = s.trim();
     let first = *t.as_bytes().first()?;
@@ -988,6 +1125,14 @@ pub fn parse_number(s: &str) -> Option<f64> {
 
 /// Like [`parse_number`] but also accepts the textual NaN / infinity forms
 /// written by C and C++ runtimes (`nan`, `-nan(ind)`, `inf`, `1.#QNAN`, ...).
+///
+/// ```
+/// use csx::expr::parse_number_lenient;
+///
+/// assert!(parse_number_lenient("-nan(ind)").unwrap().is_nan());
+/// assert_eq!(parse_number_lenient("-inf"), Some(f64::NEG_INFINITY));
+/// assert_eq!(parse_number_lenient("7"), Some(7.0));
+/// ```
 pub fn parse_number_lenient(s: &str) -> Option<f64> {
     if let Some(v) = parse_number(s) {
         return Some(v);

@@ -49,6 +49,19 @@
 //! * [`fdtd`]: openEMS simulation settings.
 //! * [`prelude`]: glob-importable common types.
 //!
+//! ## Conventions
+//!
+//! * Axis indices are `usize`: `0` = x (ρ), `1` = y (α), `2` = z.
+//! * Lengths are in drawing units (see
+//!   [`RectilinearGrid::delta_unit`]); material parameters are SI.
+//! * Angles are radians.
+//! * Point queries always take the [`CoordSystem`] of the point.
+//! * Parametric values are re-evaluated by [`ContinuousStructure::update`].
+//! * NaN marks unset values ([`Scalar::is_unset`]) and is false in
+//!   expressions.
+//!
+//! Details: [`coords`](coords#crate-wide-conventions) and [`expr`].
+//!
 //! ## Stability
 //!
 //! Enums and option/result structs that are expected to grow (errors, shape
