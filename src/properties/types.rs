@@ -88,6 +88,11 @@ macro_rules! id_enum {
 
             /// Accepts a symbolic name (case-insensitive, `-`/`_` ignored)
             /// or a numeric id (also float-formatted, e.g. `1.000000e+00`).
+            ///
+            /// # Errors
+            ///
+            /// [`Error::Format`] if `s` is neither a known name nor an
+            /// integer id.
             fn from_str(s: &str) -> Result<Self, Error> {
                 let key = normalize(s);
                 $( if normalize($s) == key { return Ok($name::$v); } )*
@@ -261,6 +266,17 @@ id_enum! {
 ///
 /// Used where a file stores an axis index (lumped element `Direction`,
 /// probe `NormDir`); ids outside 0..=2 are rejected when reading.
+///
+/// ```
+/// use csx::properties::Axis;
+///
+/// assert_eq!(Axis::try_from(2usize)?, Axis::Z);
+/// assert_eq!("rho".parse::<Axis>()?, Axis::X);
+/// assert_eq!(Axis::Y.index(), 1);
+/// let v = [10.0, 20.0, 30.0];
+/// assert_eq!(v[Axis::Z.index()], 30.0);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 pub enum Axis {
     /// x (or ρ in cylindrical coordinates); id 0.
@@ -300,6 +316,10 @@ impl From<Axis> for usize {
 
 impl TryFrom<usize> for Axis {
     type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] for indices above 2.
     fn try_from(i: usize) -> Result<Axis, Error> {
         Axis::from_index(i).ok_or_else(|| Error::Invalid(format!("axis {i} is not 0, 1 or 2")))
     }
@@ -307,6 +327,10 @@ impl TryFrom<usize> for Axis {
 
 impl TryFrom<i32> for Axis {
     type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] for ids outside 0..=2.
     fn try_from(i: i32) -> Result<Axis, Error> {
         usize::try_from(i)
             .ok()
@@ -329,6 +353,10 @@ impl FromStr for Axis {
     type Err = Error;
 
     /// Accepts `x`/`y`/`z` (also `rho`, `alpha`) or an index 0..=2.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`] for anything else.
     fn from_str(s: &str) -> Result<Axis, Error> {
         let bad = || Error::Format(format!("invalid axis {s:?}"));
         match s.trim().to_ascii_lowercase().as_str() {

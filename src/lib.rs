@@ -97,7 +97,9 @@ pub use math::{BoundingBox, Mat4, Vec3};
 pub use param::{Parameter, ParameterSet, Scalar, ScalarPoint};
 pub use primitives::{Primitive, Shape};
 pub use properties::{Axis, Material, Property, PropertyKind, PropertyType, TypeMask};
-pub use structure::{BackgroundMaterial, ContinuousStructure, Hit, Medium, PropertyId};
+pub use structure::{
+    BackgroundMaterial, ContinuousStructure, Hit, Medium, PropertyId, ValidationIssue,
+};
 pub use transform::{Transform, TransformOp};
 
 /// The most commonly used types, for glob import:

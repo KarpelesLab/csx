@@ -4,12 +4,45 @@
 //! Positions are in drawing units; multiply by [`RectilinearGrid::delta_unit`]
 //! to obtain metres. In a cylindrical grid the three axes are `ρ`, `α`
 //! (radians) and `z`.
+//!
+//! Lines are kept sorted and de-duplicated by every mutating method, so
+//! lookups ([`RectilinearGrid::cell_index`], [`RectilinearGrid::snap`], ...)
+//! are binary searches. [`smooth_lines`] fills the gaps between fixed lines
+//! with a graded mesh; [`crate::mesh`] derives fixed lines from a model.
+//!
+//! ```
+//! use csx::RectilinearGrid;
+//!
+//! let mut g = RectilinearGrid::new();
+//! g.delta_unit = 1e-3; // millimetres
+//! g.set_lines(0, [-10.0, 0.0, 10.0])?;
+//! g.set_lines(1, [-10.0, 10.0])?;
+//! g.set_lines(2, [0.0, 0.8, 5.0])?;
+//! g.smooth(0, 1.0, 1.4)?; // ≤ 1 mm cells, neighbour ratio ≤ 1.4
+//! assert!(g.cell_size_range(0).unwrap().1 <= 1.0 + 1e-9);
+//! assert_eq!(g.num_lines()[1], 2);
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use crate::coords::CoordSystem;
 use crate::error::{Error, Result};
 use crate::math::{BoundingBox, Vec3};
 
-/// Three sets of mesh lines.
+/// Three sets of mesh lines (`<RectilinearGrid>` in files).
+///
+/// Axes are indexed 0, 1, 2 (x, y, z or ρ, α, z).
+///
+/// ```
+/// use csx::RectilinearGrid;
+///
+/// let mut g = RectilinearGrid::new();
+/// g.set_lines(0, [3.0, 0.0, 1.0, 1.0])?; // sorted and de-duplicated
+/// assert_eq!(g.lines(0), &[0.0, 1.0, 3.0]);
+/// g.add_line(0, 2.0)?;
+/// assert_eq!(g.delta_cell(0, 2), Some(1.0));
+/// assert_eq!(g.nearest_line(0, 2.4), Some(2));
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct RectilinearGrid {
     lines: [Vec<f64>; 3],
@@ -60,7 +93,16 @@ impl RectilinearGrid {
             .product()
     }
 
-    /// Replaces the lines along `dir` (sorted and de-duplicated).
+    /// Replaces the lines along `dir` (sorted and de-duplicated: values
+    /// closer than 1e-13 relative to the largest magnitude are merged).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if a line is not finite; the grid is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// If `dir > 2`.
     pub fn set_lines(&mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Result<()> {
         let v: Vec<f64> = lines.into_iter().collect();
         if let Some(bad) = v.iter().find(|x| !x.is_finite()) {
@@ -71,7 +113,16 @@ impl RectilinearGrid {
         Ok(())
     }
 
-    /// Adds lines along `dir`.
+    /// Adds lines along `dir`, keeping the list sorted and de-duplicated.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if a line is not finite; lines before it were
+    /// already added.
+    ///
+    /// # Panics
+    ///
+    /// If `dir > 2`.
     pub fn add_lines(&mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Result<()> {
         for l in lines {
             if !l.is_finite() {
@@ -84,6 +135,14 @@ impl RectilinearGrid {
     }
 
     /// Adds a single line.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if `l` is not finite.
+    ///
+    /// # Panics
+    ///
+    /// If `dir > 2`.
     pub fn add_line(&mut self, dir: usize, l: f64) -> Result<()> {
         self.add_lines(dir, [l])
     }
@@ -141,7 +200,19 @@ impl RectilinearGrid {
         Some(if v - l[i - 1] <= l[i] - v { i - 1 } else { i })
     }
 
-    /// Index of the line exactly at `v` (within a relative tolerance).
+    /// Index of the line exactly at `v` (within a relative tolerance of
+    /// 1e-12), `None` if no line is there. Use it to check that a sheet or
+    /// a port lies on the mesh.
+    ///
+    /// ```
+    /// use csx::RectilinearGrid;
+    ///
+    /// let mut g = RectilinearGrid::new();
+    /// g.set_lines(2, [0.0, 0.254, 1.0])?;
+    /// assert_eq!(g.snap(2, 0.254), Some(1));
+    /// assert_eq!(g.snap(2, 0.25), None);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     pub fn snap(&self, dir: usize, v: f64) -> Option<usize> {
         let i = self.nearest_line(dir, v)?;
         let x = self.lines[dir][i];
@@ -153,7 +224,20 @@ impl RectilinearGrid {
     }
 
     /// Index `i` of the cell `[line[i], line[i+1])` containing `v`; the last
-    /// line belongs to the last cell.
+    /// line belongs to the last cell. `None` outside the mesh or with fewer
+    /// than two lines.
+    ///
+    /// ```
+    /// use csx::RectilinearGrid;
+    ///
+    /// let mut g = RectilinearGrid::new();
+    /// g.set_lines(0, [0.0, 1.0, 3.0])?;
+    /// assert_eq!(g.cell_index(0, 0.5), Some(0));
+    /// assert_eq!(g.cell_index(0, 1.0), Some(1));
+    /// assert_eq!(g.cell_index(0, 3.0), Some(1));
+    /// assert_eq!(g.cell_index(0, 3.5), None);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     pub fn cell_index(&self, dir: usize, v: f64) -> Option<usize> {
         let l = &self.lines[dir];
         if l.len() < 2 || v < l[0] || v > l[l.len() - 1] {
@@ -191,7 +275,12 @@ impl RectilinearGrid {
         )
     }
 
-    /// Smooths the lines along `dir` in place; see [`smooth_lines`].
+    /// Smooths the lines along `dir` in place, treating the current lines
+    /// as fixed; see [`smooth_lines`].
+    ///
+    /// # Errors
+    ///
+    /// As [`smooth_lines`]; the grid is unchanged on error.
     pub fn smooth(&mut self, dir: usize, max_res: f64, ratio: f64) -> Result<()> {
         let s = smooth_lines(&self.lines[dir], max_res, ratio)?;
         self.lines[dir] = s;
@@ -207,7 +296,27 @@ impl RectilinearGrid {
 /// function that grows linearly (i.e. geometrically per cell) away from the
 /// neighbouring cells, capped at `max_res`, and distributes points so each
 /// cell spans one unit of `∫ dx / h(x)`. Neighbour sizes are refined
-/// iteratively until stable.
+/// iteratively until stable. Non-finite input lines are ignored; fewer than
+/// two distinct lines are returned unchanged.
+///
+/// ```
+/// use csx::grid::smooth_lines;
+///
+/// // a thin 0.1 wide feature next to a 10 wide region
+/// let lines = smooth_lines(&[0.0, 0.1, 10.0], 1.0, 1.5)?;
+/// assert!(lines.contains(&0.1));
+/// let cells: Vec<f64> = lines.windows(2).map(|w| w[1] - w[0]).collect();
+/// assert!(cells.iter().all(|&c| c <= 1.0 + 1e-9));
+/// for w in cells.windows(2) {
+///     assert!(w[1] / w[0] < 1.6 && w[0] / w[1] < 1.6);
+/// }
+/// # Ok::<(), csx::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`Error::Invalid`] if `max_res` is not positive, `ratio` is not a finite
+/// value ≥ 1, or the result would exceed [`MAX_SMOOTH_LINES`] lines.
 pub fn smooth_lines(fixed: &[f64], max_res: f64, ratio: f64) -> Result<Vec<f64>> {
     if max_res.is_nan() || !ratio.is_finite() || max_res <= 0.0 || ratio < 1.0 {
         return Err(Error::Invalid(format!(

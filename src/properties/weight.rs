@@ -1,4 +1,5 @@
-//! Position-dependent weighting functions.
+//! Position-dependent weighting functions (re-exported from
+//! [`crate::properties`]).
 
 use crate::coords::cartesian_to_spherical;
 use crate::error::Result;
@@ -11,7 +12,18 @@ use crate::param::{ParameterSet, Scalar};
 /// angle).
 pub const WEIGHT_VARS: [&str; 7] = ["x", "y", "z", "rho", "a", "r", "t"];
 
-/// Computes the weighting-function variable slots for a Cartesian point.
+/// Computes the weighting-function variable slots ([`WEIGHT_VARS`] order)
+/// for a Cartesian point.
+///
+/// ```
+/// use csx::properties::weight_vars;
+/// use csx::Vec3;
+///
+/// let [x, y, z, rho, a, r, t] = weight_vars(Vec3::new(0.0, 3.0, 4.0));
+/// assert_eq!((x, y, z, rho, r), (0.0, 3.0, 4.0, 3.0, 5.0));
+/// assert!((a - std::f64::consts::FRAC_PI_2).abs() < 1e-15);
+/// assert!((t - (3.0f64).atan2(4.0)).abs() < 1e-15);
+/// ```
 #[inline]
 pub fn weight_vars(p: Vec3) -> [f64; 7] {
     let (r, t, a) = cartesian_to_spherical(p);
@@ -20,6 +32,28 @@ pub fn weight_vars(p: Vec3) -> [f64; 7] {
 
 /// A weighting function: an expression over [`WEIGHT_VARS`] that multiplies
 /// a base value. The default function is the constant `1`.
+///
+/// The expression may also reference parameters; those are resolved by
+/// [`WeightFn::update`] (normally through
+/// [`ContinuousStructure::update`](crate::ContinuousStructure::update)).
+/// Until then, and if the expression is malformed, the function evaluates
+/// to `1`.
+///
+/// ```
+/// use csx::properties::WeightFn;
+/// use csx::{ParameterSet, Vec3};
+///
+/// let w = WeightFn::new("exp(-(x^2 + y^2))");
+/// assert_eq!(w.eval(Vec3::ZERO), 1.0);
+/// assert!(w.eval(Vec3::new(1.0, 0.0, 0.0)) < 0.37);
+///
+/// let mut taper = WeightFn::new("1 - rho/R");
+/// let mut params = ParameterSet::new();
+/// params.set("R", 4.0);
+/// taper.update(&params)?;
+/// assert_eq!(taper.eval(Vec3::new(0.0, 2.0, 0.0)), 0.5);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeightFn {
     src: String,
@@ -89,6 +123,12 @@ impl WeightFn {
     }
 
     /// Recompiles the expression against `params`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`](crate::Error::Parse) for a malformed expression,
+    /// [`Error::UnknownVariable`](crate::Error::UnknownVariable) for a name
+    /// that is neither a weighting variable nor a parameter.
     pub fn update(&mut self, params: &ParameterSet) -> Result<()> {
         if parse_number(&self.src).is_some() {
             return Ok(());
@@ -108,6 +148,21 @@ impl From<&str> for WeightFn {
 
 /// A possibly anisotropic quantity: one value and one weighting function per
 /// axis.
+///
+/// ```
+/// use csx::properties::{Aniso, weight_vars};
+/// use csx::{Scalar, Vec3};
+///
+/// let mut a = Aniso::iso(2.0);
+/// assert!(a.is_isotropic() && !a.is_weighted());
+/// a.value[2] = Scalar::new(3.0);
+/// a.set_weight("1 + z");
+/// assert!(!a.is_isotropic() && a.is_weighted());
+/// let vars = weight_vars(Vec3::new(0.0, 0.0, 1.0));
+/// assert_eq!(a.at_vars(0, &vars), 4.0);
+/// assert_eq!(a.at_vars(2, &vars), 6.0);
+/// assert_eq!(a.base(2), 3.0);
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Aniso {
     /// Base values per axis.

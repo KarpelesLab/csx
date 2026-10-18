@@ -1,4 +1,4 @@
-//! Property kind payloads.
+//! Property kind payloads (re-exported from [`crate::properties`]).
 
 use crate::error::Result;
 use crate::math::Vec3;
@@ -17,6 +17,28 @@ use super::weight::{Aniso, WeightFn, weight_vars};
 /// * `kappa`: electric conductivity (S/m)
 /// * `sigma`: magnetic conductivity (Ω/m)
 /// * `density`: mass density (kg/m³)
+///
+/// The default is vacuum (εᵣ = μᵣ = 1, lossless), isotropic.
+///
+/// ```
+/// use csx::properties::{Material, MaterialQuantity};
+/// use csx::Vec3;
+///
+/// // isotropic FR4
+/// let fr4 = Material::new(4.3, 0.02);
+/// assert_eq!(fr4.base_value(MaterialQuantity::Epsilon, 2), 4.3);
+///
+/// // anisotropic (uniaxial) material: ε_z differs
+/// let mut m = Material::new(9.4, 0.0);
+/// m.isotropic = false;
+/// m.epsilon.value[2].set(11.6);
+/// assert_eq!(m.values_at(MaterialQuantity::Epsilon, Vec3::ZERO), [9.4, 9.4, 11.6]);
+///
+/// // graded permittivity along x
+/// let mut g = Material::new(2.0, 0.0);
+/// g.epsilon.set_weight("1 + x/10");
+/// assert_eq!(g.value_at(MaterialQuantity::Epsilon, 0, Vec3::new(5.0, 0.0, 0.0)), 3.0);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Material {
     /// Relative permittivity.
@@ -116,7 +138,9 @@ impl Material {
         if self.isotropic { 0 } else { dir.min(2) }
     }
 
-    /// Weighted value of `q` along axis `dir` at Cartesian point `p`.
+    /// Weighted value of `q` along axis `dir` (0..=2; higher values are
+    /// clamped to 2) at Cartesian point `p`. Isotropic materials use axis 0
+    /// for every direction.
     pub fn value_at(&self, q: MaterialQuantity, dir: usize, p: Vec3) -> f64 {
         let a = self.quantity(q);
         let d = self.axis(dir);
@@ -160,7 +184,23 @@ impl Material {
 ///
 /// For the electric part (similar for the magnetic part):
 /// `ε(ω) = ε∞ − ω_p² / (ω² − ω_L² − iω/τ)`; a zero pole frequency gives a
-/// Drude pole. Frequencies are in Hz (not rad/s).
+/// Drude pole. Frequencies are in Hz (not rad/s): `ω_p = 2π·f_p`.
+///
+/// File attributes (1-based pole index `n`): `EpsilonPlasmaFrequency_n`,
+/// `EpsilonLorPoleFrequency_n`, `EpsilonRelaxTime_n` and the `Mue…`
+/// counterparts.
+///
+/// ```
+/// use csx::properties::{Aniso, LorentzPole};
+///
+/// // Drude pole: plasma frequency 2 THz, relaxation time 10 fs
+/// let pole = LorentzPole {
+///     eps_plasma_frequency: Aniso::iso(2e12),
+///     eps_relax_time: Aniso::iso(1e-14),
+///     ..LorentzPole::zero()
+/// };
+/// assert_eq!(pole.eps_lorentz_pole_frequency.base(0), 0.0);
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LorentzPole {
     /// Electric plasma frequency.
@@ -204,6 +244,16 @@ impl LorentzPole {
 
 /// One pole of a Debye dispersion model:
 /// `ε(ω) = ε∞ + Δε / (1 + iωτ)`.
+///
+/// File attributes (1-based pole index `n`): `EpsilonDelta_n`,
+/// `EpsilonRelaxTime_n`.
+///
+/// ```
+/// use csx::properties::DebyePole;
+///
+/// let p = DebyePole::new(74.0, 8.3e-12); // water-like relaxation
+/// assert_eq!(p.eps_delta.base(0), 74.0);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct DebyePole {
     /// Permittivity step Δε.
@@ -232,7 +282,24 @@ impl Default for DebyePole {
     }
 }
 
-/// Drude/Lorentz dispersive material.
+/// Drude/Lorentz dispersive material (`<LorentzMaterial>`): a static
+/// [`Material`] (ε∞, μ∞, losses) plus any number of [`LorentzPole`]s.
+///
+/// ```
+/// use csx::properties::{Aniso, LorentzMaterial, LorentzPole, Material};
+/// use csx::Property;
+///
+/// let drude = LorentzMaterial {
+///     material: Material::new(1.0, 0.0),
+///     poles: vec![LorentzPole {
+///         eps_plasma_frequency: Aniso::iso(2.1e15),
+///         eps_relax_time: Aniso::iso(1e-14),
+///         ..LorentzPole::zero()
+///     }],
+/// };
+/// let p = Property::lorentz_material("metal_drude", drude);
+/// assert_eq!(p.kind.type_name(), "LorentzMaterial");
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LorentzMaterial {
     /// Static (high frequency limit) material parameters.
@@ -241,7 +308,20 @@ pub struct LorentzMaterial {
     pub poles: Vec<LorentzPole>,
 }
 
-/// Debye dispersive material.
+/// Debye dispersive material (`<DebyeMaterial>`): a static [`Material`]
+/// (ε∞) plus any number of [`DebyePole`]s.
+///
+/// ```
+/// use csx::properties::{DebyeMaterial, DebyePole, Material};
+/// use csx::Property;
+///
+/// let tissue = DebyeMaterial {
+///     material: Material::new(4.0, 0.2),
+///     poles: vec![DebyePole::new(50.0, 7.2e-12), DebyePole::new(1100.0, 3.2e-8)],
+/// };
+/// let p = Property::debye_material("muscle", tissue);
+/// assert_eq!(p.kind.material().unwrap().epsilon.base(0), 4.0);
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DebyeMaterial {
     /// Static (high frequency limit) material parameters.
@@ -276,7 +356,8 @@ impl DebyeMaterial {
 /// A material defined on a discrete voxel grid stored in an external file.
 ///
 /// Only the description is modelled; the voxel data itself (usually HDF5)
-/// is not loaded by this crate.
+/// is not loaded by this crate. In files the data source is a
+/// `<DiscFile Type File UseDBBackground Scale/>` child element.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DiscMaterial {
     /// Static parameters used outside the voxel data.
@@ -290,7 +371,16 @@ pub struct DiscMaterial {
     pub attributes: Vec<(String, String)>,
 }
 
-/// A thin conducting sheet with finite conductivity.
+/// A thin conducting sheet with finite conductivity (`<ConductingSheet>`),
+/// applied to 2-D primitives. A thickness of 0 behaves like a perfect
+/// conductor.
+///
+/// ```
+/// use csx::properties::ConductingSheet;
+///
+/// let cu = ConductingSheet::new(5.8e7, 35e-6); // 35 µm copper
+/// assert_eq!(cu.thickness.value(), 35e-6);
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConductingSheet {
     /// Conductivity (S/m).
@@ -309,7 +399,25 @@ impl ConductingSheet {
     }
 }
 
-/// Field excitation.
+/// Field excitation (`<Excitation>`): a source applied on the mesh edges
+/// covered by the property's primitives.
+///
+/// The amplitude per axis is `excite[d] · weight[d](x, y, z)`; the time
+/// signal itself is part of the simulation settings
+/// ([`crate::fdtd::ExcitationSignal`]).
+///
+/// ```
+/// use csx::properties::{Excitation, ExcitationType, WeightFn};
+/// use csx::Vec3;
+///
+/// // soft E-field along z with a cosine taper across x
+/// let mut e = Excitation::new([0.0, 0.0, 1.0]).with_number(1);
+/// e.weight[2] = WeightFn::new("cos(pi*x/10)");
+/// assert_eq!(e.excitation_type, ExcitationType::EFieldSoft);
+/// assert!((e.amplitude_at(2, Vec3::new(0.0, 0.0, 0.0)) - 1.0).abs() < 1e-12);
+/// assert!(e.amplitude_at(2, Vec3::new(5.0, 0.0, 0.0)).abs() < 1e-12);
+/// assert_eq!(e.amplitude_at(0, Vec3::ZERO), 0.0);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Excitation {
     /// Port / excitation number.
@@ -368,7 +476,12 @@ impl Excitation {
         self
     }
 
-    /// Weighted excitation amplitude along `dir` at `p`.
+    /// Weighted excitation amplitude along `dir` (0..=2) at Cartesian point
+    /// `p`.
+    ///
+    /// # Panics
+    ///
+    /// If `dir > 2`.
     pub fn amplitude_at(&self, dir: usize, p: Vec3) -> f64 {
         self.excite[dir].value() * self.weight[dir].eval(p)
     }
@@ -382,8 +495,21 @@ impl Excitation {
     }
 }
 
-/// A probe recording a field integral or current. Waveguide mode functions
-/// are stored as the user attributes `ModeFunctionX/Y/Z` of the property.
+/// A probe recording a field integral or current (`<ProbeBox>`). Waveguide
+/// mode functions are stored as the user attributes `ModeFunctionX/Y/Z` of
+/// the property.
+///
+/// See [`ProbeType`] for what is measured and which primitive shape it
+/// expects (line for voltage, face for current, point for fields).
+///
+/// ```
+/// use csx::properties::{Axis, ProbeBox, ProbeType};
+///
+/// let u = ProbeBox::new(ProbeType::Voltage).with_weight(-1.0);
+/// let i = ProbeBox::new(ProbeType::Current).with_norm_dir(Axis::Z).with_frequencies([1e9, 2e9]);
+/// assert_eq!(u.weight.value(), -1.0);
+/// assert_eq!(i.frequencies, vec![1e9, 2e9]);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeBox {
     /// Probe number.
@@ -448,7 +574,20 @@ impl Default for ProbeBox {
     }
 }
 
-/// A field dump box.
+/// A field dump box (`<DumpBox>`): writes field data over the bounding box
+/// of its primitives.
+///
+/// Frequency-domain dump types ([`DumpType::is_frequency_domain`]) need
+/// frequencies in [`ProbeBox::frequencies`] of `probe`.
+///
+/// ```
+/// use csx::properties::{DumpBox, DumpFileType, DumpMode, DumpType};
+///
+/// let mut d = DumpBox::new(DumpType::EFieldFd).with_file_type(DumpFileType::Hdf5);
+/// d.probe.frequencies = vec![2.4e9];
+/// d.dump_mode = DumpMode::Cell;
+/// assert!(d.dump_type.is_frequency_domain());
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct DumpBox {
     /// Common probe settings.
@@ -498,7 +637,19 @@ impl Default for DumpBox {
     }
 }
 
-/// Lumped R/L/C element. Unset `c` / `l` values are NaN.
+/// Lumped R/L/C element (`<LumpedElement>`) spread over the mesh edges along
+/// `direction` inside its primitives. Unset `r` / `c` / `l` values are NaN
+/// (and omitted in files).
+///
+/// ```
+/// use csx::properties::{Axis, LumpedElement, LumpedElementType};
+///
+/// // 50 Ω in series with 1 nH
+/// let mut le = LumpedElement::resistor(Axis::Z, 50.0).with_l(1e-9);
+/// le.le_type = Some(LumpedElementType::Series);
+/// assert!(le.c.value().is_nan());
+/// assert!(le.caps);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct LumpedElement {
     /// Direction of the element.
@@ -560,7 +711,17 @@ impl LumpedElement {
     }
 }
 
-/// Absorbing boundary condition sheet.
+/// Absorbing boundary condition sheet (`<AbsorbingBC>`), applied to 2-D
+/// primitives.
+///
+/// ```
+/// use csx::properties::{AbcType, AbsorbingBC};
+/// use csx::Property;
+///
+/// let abc = AbsorbingBC { normal_sign_positive: true, abc_type: AbcType::Mur1st, ..Default::default() };
+/// let p = Property::absorbing_bc("abc", abc);
+/// assert_eq!(p.kind.type_name(), "AbsorbingBC");
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AbsorbingBC {
     /// Whether the outward normal points in positive direction.

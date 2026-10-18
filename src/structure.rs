@@ -1,4 +1,50 @@
 //! The continuous structure: the complete geometry and material model.
+//!
+//! A [`ContinuousStructure`] is the root object of a model. It owns
+//!
+//! | part | type | purpose |
+//! |---|---|---|
+//! | properties | [`Property`] (via [`PropertyId`] handles) | *what* a region is: material, metal, port, probe, ... |
+//! | primitives | [`Primitive`], owned by each property | *where* the property applies |
+//! | mesh | [`RectilinearGrid`] | FDTD mesh lines |
+//! | parameters | [`ParameterSet`] | named values used by expressions |
+//! | background | [`BackgroundMaterial`] | the medium outside every material |
+//!
+//! # Queries
+//!
+//! * [`ContinuousStructure::property_at`] — the winning property at a point
+//!   (highest primitive priority; ties go to the property added first).
+//! * [`ContinuousStructure::properties_at`] — every property at a point.
+//! * [`ContinuousStructure::medium_at`] — ε, μ, κ, σ at a point.
+//! * [`ContinuousStructure::spatial_index`] — an accelerated
+//!   [`SpatialIndex`] for many point queries.
+//! * [`ContinuousStructure::bounding_box`],
+//!   [`ContinuousStructure::primitives_in`] — spatial extent.
+//! * [`ContinuousStructure::validate`] — consistency warnings
+//!   ([`ValidationIssue`]).
+//!
+//! # Example
+//!
+//! ```
+//! use csx::primitives::BoxShape;
+//! use csx::properties::Material;
+//! use csx::{ContinuousStructure, CoordSystem, Primitive, Property, TypeMask, Vec3};
+//!
+//! let mut s = ContinuousStructure::new();
+//! let sub = s.add_property(Property::material("substrate", Material::new(3.38, 0.0)));
+//! s.add_primitive(sub, BoxShape::new([0.0, 0.0, 0.0], [10.0, 10.0, 0.8]))?;
+//! let gnd = s.add_property(Property::metal("ground"));
+//! s.add_primitive(gnd, Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [10.0, 10.0, 0.0]))
+//!     .with_priority(10))?;
+//!
+//! let p = Vec3::new(5.0, 5.0, 0.4);
+//! let hit = s.property_at(p, CoordSystem::Cartesian, TypeMask::ANY).unwrap();
+//! assert_eq!(hit.property.name, "substrate");
+//! assert_eq!(s.medium_at(p, CoordSystem::Cartesian).unwrap().epsilon, [3.38; 3]);
+//! // metal is reported as `None`
+//! assert!(s.medium_at(Vec3::new(5.0, 5.0, 0.0), CoordSystem::Cartesian).is_none());
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use std::path::PathBuf;
 
@@ -11,7 +57,18 @@ use crate::primitives::bvh::Bvh;
 use crate::primitives::{Primitive, Shape};
 use crate::properties::{MaterialQuantity, Property, PropertyKind, TypeMask};
 
-/// Material filling all space not covered by any material primitive.
+/// Material filling all space not covered by any material primitive
+/// (`<BackgroundMaterial>`; default: vacuum).
+///
+/// ```
+/// use csx::ContinuousStructure;
+/// use csx::properties::MaterialQuantity;
+///
+/// let mut s = ContinuousStructure::new();
+/// assert_eq!(s.background.value(MaterialQuantity::Epsilon), 1.0);
+/// s.background.epsilon.set(1.0006); // air
+/// assert_eq!(s.background.value(MaterialQuantity::Epsilon), 1.0006);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundMaterial {
     /// Relative permittivity.
@@ -46,7 +103,8 @@ impl BackgroundMaterial {
         self.sigma.update(p)
     }
 
-    /// Value of a quantity.
+    /// Cached value of a quantity (see the update contract on
+    /// [`ContinuousStructure`]).
     pub fn value(&self, q: MaterialQuantity) -> f64 {
         match q {
             MaterialQuantity::Epsilon => self.epsilon.value(),
@@ -58,10 +116,100 @@ impl BackgroundMaterial {
 }
 
 /// Opaque handle of a property inside a [`ContinuousStructure`].
+///
+/// Handles are returned by [`ContinuousStructure::add_property`] and
+/// [`ContinuousStructure::property_id`]; they stay valid until the property
+/// is removed and are never reused within one structure. Handles order by
+/// insertion.
+///
+/// ```
+/// use csx::{ContinuousStructure, Property};
+///
+/// let mut s = ContinuousStructure::new();
+/// let a = s.add_property(Property::metal("a"));
+/// let b = s.add_property(Property::metal("b"));
+/// assert!(a < b);
+/// assert_eq!(s.property_id("b"), Some(b));
+/// assert_eq!(s.property(a).unwrap().id(), a.get());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PropertyId(pub u32);
+pub struct PropertyId(u32);
 
-/// The result of a priority query: a property and the winning primitive.
+impl PropertyId {
+    /// The numeric id, equal to [`Property::id`] of the referenced
+    /// property.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for PropertyId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+/// A consistency problem reported by [`ContinuousStructure::validate`].
+///
+/// ```
+/// use csx::structure::ValidationIssue;
+/// use csx::{ContinuousStructure, Property};
+///
+/// let mut s = ContinuousStructure::new();
+/// s.add_property(Property::metal("m"));
+/// let issues = s.validate();
+/// assert!(matches!(&issues[0], ValidationIssue::EmptyProperty { name } if name == "m"));
+/// assert_eq!(issues[0].to_string(), "property \"m\" has no primitives");
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationIssue {
+    /// Several properties share a name (reported for each later one);
+    /// name-based lookups return the first.
+    DuplicateName {
+        /// The repeated name.
+        name: String,
+    },
+    /// A property without primitives has no effect.
+    EmptyProperty {
+        /// Property name.
+        name: String,
+    },
+    /// A primitive whose bounding box is empty (e.g. a polygon without
+    /// vertices, a mesh file that is not loaded).
+    EmptyPrimitive {
+        /// Property name.
+        property: String,
+        /// Index of the primitive within the property.
+        index: usize,
+        /// Element name of the shape (`"Box"`, `"Polygon"`, ...).
+        shape: &'static str,
+    },
+}
+
+impl core::fmt::Display for ValidationIssue {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ValidationIssue::DuplicateName { name } => {
+                write!(f, "duplicate property name {name:?}")
+            }
+            ValidationIssue::EmptyProperty { name } => {
+                write!(f, "property {name:?} has no primitives")
+            }
+            ValidationIssue::EmptyPrimitive {
+                property,
+                index,
+                shape,
+            } => write!(
+                f,
+                "property {property:?}: primitive #{index} ({shape}) is empty"
+            ),
+        }
+    }
+}
+
+/// The result of a point query: a property and the primitive that contains
+/// the point.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct Hit<'a> {
@@ -73,7 +221,16 @@ pub struct Hit<'a> {
     pub primitive_index: usize,
 }
 
-/// Electromagnetic medium at a point.
+/// Electromagnetic medium at a point, as returned by
+/// [`ContinuousStructure::medium_at`]: per-axis values with weighting
+/// functions applied.
+///
+/// | field | quantity | unit |
+/// |---|---|---|
+/// | `epsilon` | relative permittivity εᵣ | – |
+/// | `mue` | relative permeability μᵣ | – |
+/// | `kappa` | electric conductivity κ | S/m |
+/// | `sigma` | magnetic conductivity σ | Ω/m |
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Medium {
     /// Relative permittivity per axis.
@@ -99,6 +256,25 @@ pub struct Medium {
 /// content, before querying. Caches that could silently go stale
 /// (compiled user functions, loaded mesh files) are only reachable through
 /// setters that invalidate them.
+///
+/// ```
+/// use csx::primitives::BoxShape;
+/// use csx::{ContinuousStructure, CoordSystem, Property, ScalarPoint, TypeMask, Vec3};
+///
+/// let mut s = ContinuousStructure::new();
+/// s.parameters.set("w", 2.0);
+/// let id = s.add_property(Property::metal("strip"));
+/// s.add_primitive(id, BoxShape::new([0.0, 0.0, 0.0], ScalarPoint::from(["w", "1", "0"])))?;
+/// s.update()?; // evaluate `w`
+///
+/// let probe = Vec3::new(1.5, 0.5, 0.0);
+/// assert!(s.property_at(probe, CoordSystem::Cartesian, TypeMask::ANY).is_some());
+///
+/// s.parameters.set("w", 1.0);
+/// s.update()?; // geometry follows the parameter
+/// assert!(s.property_at(probe, CoordSystem::Cartesian, TypeMask::ANY).is_none());
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContinuousStructure {
     properties: Vec<Property>,
@@ -121,7 +297,8 @@ pub struct ContinuousStructure {
 }
 
 impl ContinuousStructure {
-    /// Empty structure.
+    /// Empty structure: Cartesian, no properties, empty grid with
+    /// `delta_unit = 1`, vacuum background.
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,7 +313,24 @@ impl ContinuousStructure {
         PropertyId(self.next_id)
     }
 
-    /// Adds a primitive to the property `id`.
+    /// Adds a primitive to the property `id` and returns it for further
+    /// configuration.
+    ///
+    /// ```
+    /// use csx::primitives::Sphere;
+    /// use csx::{ContinuousStructure, Property};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// let id = s.add_property(Property::metal("ball"));
+    /// s.add_primitive(id, Sphere::new([0.0, 0.0, 0.0], 1.0))?.priority = 5;
+    /// assert_eq!(s.property(id).unwrap().primitives[0].priority, 5);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if `id` does not refer to a property of this
+    /// structure (e.g. it was removed).
     pub fn add_primitive(
         &mut self,
         id: PropertyId,
@@ -148,9 +342,10 @@ impl ContinuousStructure {
         Ok(p.add_primitive(prim))
     }
 
-    /// Removes a property, returning it.
+    /// Removes a property, returning it (detached, with [`Property::id`]
+    /// reset to 0). Returns `None` if `id` is not in this structure.
     pub fn remove_property(&mut self, id: PropertyId) -> Option<Property> {
-        let i = self.properties.iter().position(|p| p.id == id.0)?;
+        let i = self.properties.iter().position(|p| p.id == id.get())?;
         let mut p = self.properties.remove(i);
         p.id = 0;
         Some(p)
@@ -166,7 +361,18 @@ impl ContinuousStructure {
         self.properties.iter_mut()
     }
 
-    /// Properties matching `mask`.
+    /// Properties matching `mask`, in insertion order.
+    ///
+    /// ```
+    /// use csx::properties::Material;
+    /// use csx::{ContinuousStructure, Property, PropertyType, TypeMask};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// s.add_property(Property::material("fr4", Material::new(4.3, 0.0)));
+    /// s.add_property(Property::metal("pec"));
+    /// assert_eq!(s.properties_of(TypeMask::MATERIALS).count(), 1);
+    /// assert_eq!(s.properties_of(PropertyType::Metal).next().unwrap().name, "pec");
+    /// ```
     pub fn properties_of(&self, mask: impl Into<TypeMask>) -> impl Iterator<Item = &Property> {
         let mask = mask.into();
         self.properties
@@ -176,12 +382,12 @@ impl ContinuousStructure {
 
     /// Property by handle.
     pub fn property(&self, id: PropertyId) -> Option<&Property> {
-        self.properties.iter().find(|p| p.id == id.0)
+        self.properties.iter().find(|p| p.id == id.get())
     }
 
     /// Mutable property by handle.
     pub fn property_mut(&mut self, id: PropertyId) -> Option<&mut Property> {
-        self.properties.iter_mut().find(|p| p.id == id.0)
+        self.properties.iter_mut().find(|p| p.id == id.get())
     }
 
     /// First property with the given name.
@@ -207,7 +413,20 @@ impl ContinuousStructure {
     }
 
     /// Re-evaluates every parametric value against [`Self::parameters`] and
-    /// loads external mesh files of `PolyhedronReader` primitives.
+    /// loads external mesh files of `PolyhedronReader` primitives that are
+    /// not loaded yet (relative paths are resolved against
+    /// [`Self::base_dir`]).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::UnknownVariable`] / [`Error::Parse`] if an expression
+    ///   refers to an undefined parameter or is malformed.
+    /// * [`Error::Invalid`] for values outside their domain (negative radius,
+    ///   singular transformation, NaN result, ...), prefixed with the
+    ///   property name.
+    /// * [`Error::Io`] / [`Error::Format`] if a mesh file cannot be read.
+    ///
+    /// Values updated before the failing one keep their new value.
     pub fn update(&mut self) -> Result<()> {
         self.update_parameters()?;
         for p in &mut self.properties {
@@ -224,6 +443,10 @@ impl ContinuousStructure {
 
     /// Re-evaluates every parametric value against [`Self::parameters`]
     /// without touching external files.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::update`], except for the mesh file errors.
     pub fn update_parameters(&mut self) -> Result<()> {
         let params = &self.parameters;
         self.background.update(params)?;
@@ -237,6 +460,32 @@ impl ContinuousStructure {
     /// `cs`) among properties matching `mask`. On equal priority the
     /// primitive of the earlier property (then the earlier primitive) wins,
     /// as in CSXCAD.
+    ///
+    /// Primitives without their own coordinate system use
+    /// [`Self::coord_system`]. Use [`Self::spatial_index`] for many queries.
+    ///
+    /// ```
+    /// use csx::primitives::BoxShape;
+    /// use csx::properties::Material;
+    /// use csx::{ContinuousStructure, CoordSystem, Primitive, Property, TypeMask, Vec3};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// let low = s.add_property(Property::material("low", Material::new(2.0, 0.0)));
+    /// let high = s.add_property(Property::material("high", Material::new(9.0, 0.0)));
+    /// s.add_primitive(low, Primitive::new(BoxShape::new([0.0; 3], [2.0; 3])).with_priority(1))?;
+    /// s.add_primitive(high, Primitive::new(BoxShape::new([1.0; 3], [3.0; 3])).with_priority(2))?;
+    ///
+    /// let p = Vec3::new(1.5, 1.5, 1.5);
+    /// let hit = s.property_at(p, CoordSystem::Cartesian, TypeMask::ANY).unwrap();
+    /// assert_eq!(hit.property.name, "high");
+    /// assert_eq!(hit.primitive_index, 0);
+    /// assert_eq!(s.properties_at(p, CoordSystem::Cartesian, TypeMask::ANY).len(), 2);
+    /// // queries may be given in cylindrical coordinates (ρ, α, z)
+    /// let cyl = Vec3::new(0.5, 0.0, 0.5);
+    /// let hit = s.property_at(cyl, CoordSystem::Cylindrical, TypeMask::ANY).unwrap();
+    /// assert_eq!(hit.property.name, "low");
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     pub fn property_at(
         &self,
         p: Vec3,
@@ -266,8 +515,9 @@ impl ContinuousStructure {
         best
     }
 
-    /// All properties (matching `mask`) having at least one primitive that
-    /// contains `p`, highest priority first.
+    /// Every primitive (of properties matching `mask`) that contains `p`,
+    /// highest priority first; ties keep insertion order. The first entry is
+    /// the result of [`Self::property_at`].
     pub fn properties_at(
         &self,
         p: Vec3,
@@ -298,7 +548,28 @@ impl ContinuousStructure {
 
     /// The physical medium at `p`: the highest-priority material/metal
     /// primitive, or the background material. Metals are reported as
-    /// `None`.
+    /// `None`. Weighting functions are evaluated at the Cartesian position
+    /// of `p`.
+    ///
+    /// ```
+    /// use csx::primitives::BoxShape;
+    /// use csx::properties::Material;
+    /// use csx::{ContinuousStructure, CoordSystem, Property, Vec3};
+    ///
+    /// let mut m = Material::new(2.0, 0.01);
+    /// m.epsilon.set_weight("1 + x"); // ε grows along x
+    /// let mut s = ContinuousStructure::new();
+    /// let id = s.add_property(Property::material("graded", m));
+    /// s.add_primitive(id, BoxShape::new([0.0; 3], [1.0; 3]))?;
+    ///
+    /// let med = s.medium_at(Vec3::new(0.5, 0.5, 0.5), CoordSystem::Cartesian).unwrap();
+    /// assert_eq!(med.epsilon, [3.0; 3]);
+    /// assert_eq!(med.kappa, [0.01; 3]);
+    /// // outside: background (vacuum)
+    /// let air = s.medium_at(Vec3::new(5.0, 0.0, 0.0), CoordSystem::Cartesian).unwrap();
+    /// assert_eq!(air.epsilon, [1.0; 3]);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     pub fn medium_at(&self, p: Vec3, cs: CoordSystem) -> Option<Medium> {
         let hit = self.property_at(
             p,
@@ -327,7 +598,9 @@ impl ContinuousStructure {
         }
     }
 
-    /// Union of the bounding boxes of all primitives (in `cs`).
+    /// Union of the bounding boxes of all primitives (in `cs`). Unbounded
+    /// primitives (user-defined regions) are ignored; an empty structure
+    /// gives [`BoundingBox::EMPTY`].
     pub fn bounding_box(&self, cs: CoordSystem) -> BoundingBox {
         self.primitives()
             .map(|(_, q)| q.bounding_box_in(cs, self.coord_system))
@@ -350,33 +623,74 @@ impl ContinuousStructure {
             .filter(move |(_, q)| q.bounding_box_in(cs, dcs).intersects(region))
     }
 
-    /// Builds an index for fast repeated point queries.
+    /// Builds an index for fast repeated point queries in coordinate system
+    /// `cs`, restricted to properties matching `mask`.
+    ///
+    /// The index borrows the structure; rebuild it after modifying the
+    /// model.
+    ///
+    /// ```
+    /// use csx::primitives::BoxShape;
+    /// use csx::{ContinuousStructure, CoordSystem, Property, TypeMask, Vec3};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// for i in 0..100 {
+    ///     let id = s.add_property(Property::metal(format!("m{i}")));
+    ///     let x = i as f64;
+    ///     s.add_primitive(id, BoxShape::new([x, 0.0, 0.0], [x + 0.5, 1.0, 1.0]))?;
+    /// }
+    /// let index = s.spatial_index(CoordSystem::Cartesian, TypeMask::ANY);
+    /// assert_eq!(index.query(Vec3::new(42.25, 0.5, 0.5)).unwrap().property.name, "m42");
+    /// assert!(index.query(Vec3::new(42.75, 0.5, 0.5)).is_none());
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     #[must_use]
     pub fn spatial_index(&self, cs: CoordSystem, mask: impl Into<TypeMask>) -> SpatialIndex<'_> {
         SpatialIndex::new(self, cs, mask.into())
     }
 
     /// Consistency checks: duplicate names, properties without primitives,
-    /// primitives with empty or non-finite bounds. Returns human readable
-    /// warnings.
+    /// primitives with empty bounds. Returns the issues found (empty if the
+    /// model is consistent); they are warnings, not errors.
+    ///
+    /// ```
+    /// use csx::primitives::BoxShape;
+    /// use csx::{ContinuousStructure, Property};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// let id = s.add_property(Property::metal("pec"));
+    /// s.add_primitive(id, BoxShape::new([0.0; 3], [1.0; 3]))?;
+    /// assert!(s.validate().is_empty());
+    ///
+    /// s.add_property(Property::metal("pec"));
+    /// for issue in s.validate() {
+    ///     println!("warning: {issue}");
+    /// }
+    /// assert_eq!(s.validate().len(), 2); // duplicate name + no primitives
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     #[must_use]
-    pub fn validate(&self) -> Vec<String> {
+    pub fn validate(&self) -> Vec<ValidationIssue> {
         let mut w = Vec::new();
         for (i, p) in self.properties.iter().enumerate() {
             if self.properties[..i].iter().any(|q| q.name == p.name) {
-                w.push(format!("duplicate property name {:?}", p.name));
+                w.push(ValidationIssue::DuplicateName {
+                    name: p.name.clone(),
+                });
             }
             if p.primitives.is_empty() {
-                w.push(format!("property {:?} has no primitives", p.name));
+                w.push(ValidationIssue::EmptyProperty {
+                    name: p.name.clone(),
+                });
             }
             for (k, q) in p.primitives.iter().enumerate() {
                 let b = q.bounding_box(self.coord_system);
                 if b.is_empty() {
-                    w.push(format!(
-                        "property {:?}: primitive #{k} ({}) is empty",
-                        p.name,
-                        q.shape.type_name()
-                    ));
+                    w.push(ValidationIssue::EmptyPrimitive {
+                        property: p.name.clone(),
+                        index: k,
+                        shape: q.shape.type_name(),
+                    });
                 }
             }
         }
@@ -450,7 +764,8 @@ impl<'a> SpatialIndex<'a> {
         }
     }
 
-    /// Same semantics as [`ContinuousStructure::property_at`].
+    /// The winning property at `p` (expressed in the index's coordinate
+    /// system); same semantics as [`ContinuousStructure::property_at`].
     pub fn query(&self, p: Vec3) -> Option<Hit<'a>> {
         let c = self.cs.to_cartesian(p);
         // Candidate ranks (indices into `entries`), kept on the stack when

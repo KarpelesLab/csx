@@ -1,5 +1,124 @@
 //! Properties: what a region of space *is* (material, metal, excitation,
 //! probe, ...). Every property owns the primitives describing *where* it is.
+//!
+//! A [`Property`] combines a name, visualisation settings, a kind-specific
+//! payload ([`PropertyKind`]) and its [`Primitive`]s. Each kind maps to one
+//! element of the CSXCAD file format:
+//!
+//! | kind | XML element | payload | meaning |
+//! |---|---|---|---|
+//! | [`PropertyKind::Material`] | `<Material>` | [`Material`] | dielectric / magnetic / lossy material |
+//! | [`PropertyKind::LorentzMaterial`] | `<LorentzMaterial>` | [`LorentzMaterial`] | Drude / Lorentz dispersive material |
+//! | [`PropertyKind::DebyeMaterial`] | `<DebyeMaterial>` | [`DebyeMaterial`] | Debye dispersive material |
+//! | [`PropertyKind::DiscMaterial`] | `<DiscMaterial>` | [`DiscMaterial`] | voxel material from a data file |
+//! | [`PropertyKind::Metal`] | `<Metal>` | – | perfect electric conductor (PEC) |
+//! | [`PropertyKind::ConductingSheet`] | `<ConductingSheet>` | [`ConductingSheet`] | thin sheet of finite conductivity |
+//! | [`PropertyKind::LumpedElement`] | `<LumpedElement>` | [`LumpedElement`] | lumped R, L, C |
+//! | [`PropertyKind::Excitation`] | `<Excitation>` | [`Excitation`] | field source |
+//! | [`PropertyKind::ProbeBox`] | `<ProbeBox>` | [`ProbeBox`] | voltage / current / field probe |
+//! | [`PropertyKind::DumpBox`] | `<DumpBox>` | [`DumpBox`] | field dump |
+//! | [`PropertyKind::AbsorbingBC`] | `<AbsorbingBC>` | [`AbsorbingBC`] | absorbing boundary sheet |
+//! | [`PropertyKind::Unknown`] | any other | – | preserved for round-trips |
+//!
+//! [`PropertyType`] flags identify kinds; a [`TypeMask`] combines them to
+//! filter structure queries.
+//!
+//! # Material quantities
+//!
+//! | quantity | field | file attribute | unit | default |
+//! |---|---|---|---|---|
+//! | relative permittivity εᵣ | [`Material::epsilon`] | `Epsilon` | – | 1 |
+//! | relative permeability μᵣ | [`Material::mue`] | `Mue` | – | 1 |
+//! | electric conductivity κ | [`Material::kappa`] | `Kappa` | S/m | 0 |
+//! | magnetic conductivity σ | [`Material::sigma`] | `Sigma` | Ω/m | 0 |
+//! | mass density ρₘ | [`Material::density`] | `Density` | kg/m³ | 0 |
+//!
+//! Each quantity has a value and a weighting function per axis
+//! ([`Aniso`]); with [`Material::isotropic`] set (the default) only the
+//! first axis is used. In a cylindrical model the three axes are ρ, α, z.
+//!
+//! # Weighting functions
+//!
+//! A [`WeightFn`] multiplies a base value by an expression of the position
+//! (in drawing units):
+//!
+//! | variable | meaning |
+//! |---|---|
+//! | `x`, `y`, `z` | Cartesian coordinates |
+//! | `rho` | distance to the z axis, √(x² + y²) |
+//! | `a` | azimuth atan2(y, x) |
+//! | `r` | distance to the origin |
+//! | `t` | polar angle from +z |
+//!
+//! # Dispersive materials
+//!
+//! With angular frequency ω = 2πf (all model frequencies are given in Hz):
+//!
+//! * Drude / Lorentz pole ([`LorentzPole`]):
+//!   `ε(ω) = ε∞ − ω_p² / (ω² − ω_L² − iω/τ)` with plasma frequency
+//!   `ω_p = 2π·f_p`, pole frequency `ω_L = 2π·f_L` (0 for a Drude pole) and
+//!   relaxation time τ. The magnetic part is analogous.
+//! * Debye pole ([`DebyePole`]): `ε(ω) = ε∞ + Δε / (1 + iωτ)`.
+//!
+//! Several poles add up; ε∞ is the static [`Material::epsilon`].
+//!
+//! # Type identifiers
+//!
+//! Settings stored as numbers in files are typed enums with an `Other(i32)`
+//! fallback so unknown ids round-trip losslessly. Build them from numbers
+//! with `from_id`: an `Other` holding a known id compares unequal to the
+//! named variant.
+//!
+//! All of them provide `from_id` / `id`, `name`, `ALL`, `Display` and
+//! `FromStr` (symbolic name, case-insensitive with `_`/`-` ignored, or a
+//! number, also float-formatted as some writers produce):
+//!
+//! ```
+//! use csx::properties::{DumpType, ExcitationType};
+//!
+//! assert_eq!(ExcitationType::from_id(1), ExcitationType::EFieldHard);
+//! assert_eq!(ExcitationType::from_id(42), ExcitationType::Other(42));
+//! assert_eq!("plane_wave".parse::<ExcitationType>()?, ExcitationType::PlaneWave);
+//! assert_eq!("1.000000e+01".parse::<DumpType>()?, DumpType::EFieldFd);
+//! assert_eq!(DumpType::Sar1g.id(), 21);
+//! assert_eq!(DumpType::Sar1g.to_string(), "SAR1g");
+//! # Ok::<(), csx::Error>(())
+//! ```
+//!
+//! | enum | file attribute | ids |
+//! |---|---|---|
+//! | [`ExcitationType`] | `<Excitation Type>` | 0 E soft, 1 E hard, 2 H soft, 3 H hard, 10 plane wave |
+//! | [`ProbeType`] | `<ProbeBox Type>` | 0 voltage, 1 current, 2 E field, 3 H field, 10/11 waveguide voltage/current |
+//! | [`DumpType`] | `<DumpBox DumpType>` | 0–5 E, H, J, rot H, D, B (time domain); 10–15 same in frequency domain; 20, 21, 22, 29 SAR |
+//! | [`DumpMode`] | `<DumpBox DumpMode>` | 0 none, 1 node, 2 cell |
+//! | [`DumpFileType`] | `<DumpBox FileType>` | 0 VTK, 1 HDF5 |
+//! | [`LumpedElementType`] | `<LumpedElement LEtype>` | 0 parallel, 1 series |
+//! | [`AbcType`] | `<AbsorbingBC AbsorbingBoundaryType>` | 0 Mur 1st, 1 Mur 1st SA |
+//! | [`Axis`] | `Direction`, `NormDir` | 0 x/ρ, 1 y/α, 2 z |
+//!
+//! # Example
+//!
+//! ```
+//! use csx::primitives::BoxShape;
+//! use csx::properties::{
+//!     Axis, DumpBox, DumpType, Excitation, LumpedElement, Material, ProbeBox, ProbeType,
+//! };
+//! use csx::{ContinuousStructure, Property, PropertyType, TypeMask};
+//!
+//! let mut s = ContinuousStructure::new();
+//! s.add_property(
+//!     Property::material("FR4", Material::new(4.3, 0.0))
+//!         .with_primitive(BoxShape::new([-10.0, -10.0, 0.0], [10.0, 10.0, 1.6])),
+//! );
+//! s.add_property(Property::metal("patch"));
+//! s.add_property(Property::lumped_element("port_R", LumpedElement::resistor(Axis::Z, 50.0)));
+//! s.add_property(Property::excitation("port_E", Excitation::new([0.0, 0.0, 1.0])));
+//! s.add_property(Property::probe("port_U", ProbeBox::new(ProbeType::Voltage)));
+//! s.add_property(Property::dump("Et", DumpBox::new(DumpType::EField)));
+//!
+//! assert_eq!(s.properties_of(TypeMask::PHYSICAL).count(), 3);
+//! assert_eq!(s.properties_of(PropertyType::Excitation).count(), 1);
+//! ```
 
 mod kinds;
 mod types;
@@ -15,7 +134,16 @@ use crate::error::Result;
 use crate::param::{ParameterSet, Scalar};
 use crate::primitives::Primitive;
 
-/// An RGBA colour.
+/// An RGBA colour (`<FillColor>` / `<EdgeColor>` in files).
+///
+/// ```
+/// use csx::properties::Rgba;
+///
+/// let red = Rgba::new(255, 0, 0, 255);
+/// assert_eq!(Rgba::default(), Rgba::new(0, 0, 0, 255)); // opaque black
+/// assert_eq!(Rgba::from_seed(7), Rgba::from_seed(7)); // deterministic
+/// assert_ne!(Rgba::from_seed(7), red);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgba {
     /// Red.
@@ -61,6 +189,15 @@ impl Rgba {
 }
 
 /// The kind of a property, as a bit flag (see [`TypeMask`]).
+///
+/// ```
+/// use csx::{Property, PropertyType, TypeMask};
+///
+/// let p = Property::metal("pec");
+/// assert_eq!(p.property_type(), PropertyType::Metal);
+/// let mask = PropertyType::Metal | PropertyType::ConductingSheet;
+/// assert!(mask.contains(p.property_type()));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
@@ -92,6 +229,22 @@ pub enum PropertyType {
 }
 
 /// A set of [`PropertyType`]s used to filter queries.
+///
+/// Masks are built from the constants, from single types
+/// ([`TypeMask::of`], `From<PropertyType>`) and with `|`:
+///
+/// ```
+/// use csx::{PropertyType, TypeMask};
+///
+/// let mut m = TypeMask::MATERIALS | PropertyType::Metal;
+/// assert!(m.contains(PropertyType::DebyeMaterial));
+/// assert!(m.contains(PropertyType::Metal));
+/// assert!(!m.contains(PropertyType::ProbeBox));
+/// m |= PropertyType::ProbeBox;
+/// assert!(m.contains(PropertyType::ProbeBox));
+/// assert!(!TypeMask::NONE.contains(PropertyType::Metal));
+/// assert!(TypeMask::ANY.contains(PropertyType::Unknown));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeMask(pub u32);
 
@@ -166,7 +319,17 @@ impl core::ops::BitOr for PropertyType {
     }
 }
 
-/// Kind-specific data of a property.
+/// Kind-specific data of a property; see the [module docs](self) for the
+/// mapping to file elements.
+///
+/// ```
+/// use csx::properties::{Material, PropertyKind};
+///
+/// let k = PropertyKind::Material(Material::new(2.2, 0.0));
+/// assert_eq!(k.type_name(), "Material");
+/// assert_eq!(k.material().unwrap().epsilon.base(0), 2.2);
+/// assert!(PropertyKind::Metal.material().is_none());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyKind {
@@ -240,7 +403,8 @@ impl PropertyKind {
         }
     }
 
-    /// The (non-dispersive part of the) material, for material kinds.
+    /// The (non-dispersive part of the) material, for material kinds
+    /// (plain, Lorentz, Debye, discrete); `None` otherwise.
     pub fn material(&self) -> Option<&Material> {
         match self {
             PropertyKind::Material(m) => Some(m),
@@ -298,6 +462,27 @@ fn update_probe(b: &mut ProbeBox, p: &ParameterSet) -> Result<()> {
 }
 
 /// A named property together with its primitives.
+///
+/// Create properties with the kind-specific constructors
+/// ([`Property::material`], [`Property::metal`], [`Property::excitation`],
+/// ...) or [`Property::new`], attach primitives, then add them to a
+/// [`ContinuousStructure`](crate::ContinuousStructure).
+///
+/// ```
+/// use csx::primitives::{BoxShape, Cylinder};
+/// use csx::properties::{Material, Rgba};
+/// use csx::Property;
+///
+/// let mut p = Property::material("teflon", Material::new(2.1, 0.0))
+///     .with_color(Rgba::new(200, 200, 255, 128))
+///     .with_primitive(BoxShape::new([0.0; 3], [1.0; 3]));
+/// p.add_primitive(Cylinder::new([0.0; 3], [0.0, 0.0, 2.0], 0.5)).priority = 3;
+/// p.set_attribute("vendor", "acme");
+///
+/// assert_eq!(p.primitives.len(), 2);
+/// assert_eq!(p.attribute("vendor"), Some("acme"));
+/// assert_eq!(p.id(), 0); // not part of a structure yet
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Property {
     pub(crate) id: u32,
@@ -322,7 +507,15 @@ pub struct Property {
 }
 
 impl Property {
-    /// New property with default colours and no primitives.
+    /// New property with default colours (opaque black), visible, and no
+    /// primitives.
+    ///
+    /// ```
+    /// use csx::{Property, PropertyKind};
+    ///
+    /// let p = Property::new("pec", PropertyKind::Metal);
+    /// assert_eq!(p, Property::metal("pec"));
+    /// ```
     pub fn new(name: impl Into<String>, kind: PropertyKind) -> Self {
         Property {
             id: 0,
@@ -339,6 +532,14 @@ impl Property {
     }
 
     /// New plain material.
+    ///
+    /// ```
+    /// use csx::properties::Material;
+    /// use csx::{Property, PropertyType};
+    ///
+    /// let p = Property::material("Rogers 4003C", Material::new(3.38, 0.0027));
+    /// assert_eq!(p.property_type(), PropertyType::Material);
+    /// ```
     pub fn material(name: impl Into<String>, m: Material) -> Self {
         Property::new(name, PropertyKind::Material(m))
     }
@@ -349,26 +550,69 @@ impl Property {
     }
 
     /// New excitation.
+    ///
+    /// ```
+    /// use csx::properties::{Excitation, ExcitationType};
+    /// use csx::Property;
+    ///
+    /// // hard E-field source polarised along z, port number 1
+    /// let e = Excitation::new([0.0, 0.0, 1.0])
+    ///     .with_type(ExcitationType::EFieldHard)
+    ///     .with_number(1);
+    /// let p = Property::excitation("port1", e);
+    /// assert_eq!(p.kind.type_name(), "Excitation");
+    /// ```
     pub fn excitation(name: impl Into<String>, e: Excitation) -> Self {
         Property::new(name, PropertyKind::Excitation(e))
     }
 
     /// New probe.
+    ///
+    /// ```
+    /// use csx::properties::{Axis, ProbeBox, ProbeType};
+    /// use csx::Property;
+    ///
+    /// let i = Property::probe("port1_I", ProbeBox::new(ProbeType::Current).with_norm_dir(Axis::Z));
+    /// assert_eq!(i.kind.type_name(), "ProbeBox");
+    /// ```
     pub fn probe(name: impl Into<String>, p: ProbeBox) -> Self {
         Property::new(name, PropertyKind::ProbeBox(p))
     }
 
     /// New field dump.
+    ///
+    /// ```
+    /// use csx::properties::{DumpBox, DumpFileType, DumpType};
+    /// use csx::Property;
+    ///
+    /// let d = Property::dump("Et", DumpBox::new(DumpType::EField).with_file_type(DumpFileType::Hdf5));
+    /// assert_eq!(d.kind.type_name(), "DumpBox");
+    /// ```
     pub fn dump(name: impl Into<String>, d: DumpBox) -> Self {
         Property::new(name, PropertyKind::DumpBox(d))
     }
 
     /// New lumped element.
+    ///
+    /// ```
+    /// use csx::properties::{Axis, LumpedElement};
+    /// use csx::Property;
+    ///
+    /// let r = Property::lumped_element("R50", LumpedElement::resistor(Axis::Z, 50.0));
+    /// assert_eq!(r.kind.type_name(), "LumpedElement");
+    /// ```
     pub fn lumped_element(name: impl Into<String>, l: LumpedElement) -> Self {
         Property::new(name, PropertyKind::LumpedElement(l))
     }
 
     /// New conducting sheet with conductivity (S/m) and thickness (m).
+    ///
+    /// ```
+    /// use csx::Property;
+    ///
+    /// let copper = Property::conducting_sheet("copper", 5.8e7, 35e-6);
+    /// assert_eq!(copper.kind.type_name(), "ConductingSheet");
+    /// ```
     pub fn conducting_sheet(
         name: impl Into<String>,
         conductivity: impl Into<Scalar>,
@@ -380,12 +624,12 @@ impl Property {
         )
     }
 
-    /// New Drude/Lorentz dispersive material.
+    /// New Drude/Lorentz dispersive material; see [`LorentzMaterial`].
     pub fn lorentz_material(name: impl Into<String>, m: LorentzMaterial) -> Self {
         Property::new(name, PropertyKind::LorentzMaterial(m))
     }
 
-    /// New Debye dispersive material.
+    /// New Debye dispersive material; see [`DebyeMaterial`].
     pub fn debye_material(name: impl Into<String>, m: DebyeMaterial) -> Self {
         Property::new(name, PropertyKind::DebyeMaterial(m))
     }
@@ -408,7 +652,8 @@ impl Property {
         self
     }
 
-    /// Unique id within the owning structure (0 for detached properties).
+    /// Unique id within the owning structure (0 for detached properties);
+    /// equal to [`PropertyId::get`](crate::PropertyId::get) of its handle.
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -425,7 +670,7 @@ impl Property {
         self
     }
 
-    /// Adds a primitive.
+    /// Adds a primitive and returns it for further configuration.
     pub fn add_primitive(&mut self, p: impl Into<Primitive>) -> &mut Primitive {
         let i = self.primitives.len();
         self.primitives.push(p.into());
@@ -440,7 +685,8 @@ impl Property {
             .map(|(_, v)| v.as_str())
     }
 
-    /// Sets a user attribute.
+    /// Sets a user attribute (written to the `<Attributes>` element),
+    /// replacing an existing value of the same name.
     pub fn set_attribute(&mut self, name: impl Into<String>, value: impl Into<String>) {
         let (name, value) = (name.into(), value.into());
         match self.attributes.iter_mut().find(|(k, _)| *k == name) {
@@ -450,6 +696,15 @@ impl Property {
     }
 
     /// Re-evaluates parametric values of the property and its primitives.
+    /// Usually called through
+    /// [`ContinuousStructure::update`](crate::ContinuousStructure::update).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`](crate::Error::UnknownVariable) or
+    /// [`Error::Parse`](crate::Error::Parse) for unresolvable expressions,
+    /// [`Error::Invalid`](crate::Error::Invalid) (prefixed with the property
+    /// name) for out-of-domain values such as a negative radius.
     pub fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.kind.update(p).map_err(|e| context(e, &self.name))?;
         for prim in &mut self.primitives {
