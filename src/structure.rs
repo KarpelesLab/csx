@@ -307,16 +307,14 @@ impl ContinuousStructure {
         let cart = cs.to_cartesian(p);
         match hit.map(|h| &h.property.kind) {
             Some(PropertyKind::Metal) => None,
-            Some(k) => {
-                let m = k.material().expect("mask only matches materials");
-                Some(Medium {
-                    epsilon: m.values_at(MaterialQuantity::Epsilon, cart),
-                    mue: m.values_at(MaterialQuantity::Mue, cart),
-                    kappa: m.values_at(MaterialQuantity::Kappa, cart),
-                    sigma: m.values_at(MaterialQuantity::Sigma, cart),
-                })
-            }
-            None => {
+            Some(k) if let Some(m) = k.material() => Some(Medium {
+                epsilon: m.values_at(MaterialQuantity::Epsilon, cart),
+                mue: m.values_at(MaterialQuantity::Mue, cart),
+                kappa: m.values_at(MaterialQuantity::Kappa, cart),
+                sigma: m.values_at(MaterialQuantity::Sigma, cart),
+            }),
+            // No hit (the mask only matches materials and metals).
+            _ => {
                 let b = &self.background;
                 Some(Medium {
                     epsilon: [b.epsilon.value(); 3],

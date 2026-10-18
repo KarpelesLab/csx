@@ -108,16 +108,20 @@ impl RectilinearGrid {
 
     /// Bounds of the mesh (first and last line per axis).
     pub fn bounds(&self) -> BoundingBox {
-        if self.lines.iter().any(Vec::is_empty) {
-            return BoundingBox::EMPTY;
-        }
-        BoundingBox {
-            min: Vec3::new(self.lines[0][0], self.lines[1][0], self.lines[2][0]),
-            max: Vec3::new(
-                *self.lines[0].last().unwrap(),
-                *self.lines[1].last().unwrap(),
-                *self.lines[2].last().unwrap(),
-            ),
+        let [x, y, z] = &self.lines;
+        match (
+            x.first(),
+            x.last(),
+            y.first(),
+            y.last(),
+            z.first(),
+            z.last(),
+        ) {
+            (Some(&x0), Some(&x1), Some(&y0), Some(&y1), Some(&z0), Some(&z1)) => BoundingBox {
+                min: Vec3::new(x0, y0, z0),
+                max: Vec3::new(x1, y1, z1),
+            },
+            _ => BoundingBox::EMPTY,
         }
     }
 

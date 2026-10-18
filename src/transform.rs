@@ -61,28 +61,29 @@ impl TransformOp {
     }
 
     /// Builds an operation from its element name and arguments.
-    pub fn from_name_args(name: &str, args: Vec<Scalar>) -> Result<TransformOp> {
+    pub fn from_name_args(
+        name: &str,
+        args: impl IntoIterator<Item = Scalar>,
+    ) -> Result<TransformOp> {
+        let args: Vec<Scalar> = args.into_iter().collect();
         let n = args.len();
         let bad = || Error::Format(format!("transformation {name} with {n} argument(s)"));
         let mut it = args.into_iter();
-        let next3 = |it: &mut std::vec::IntoIter<Scalar>| -> [Scalar; 3] {
-            [it.next().unwrap(), it.next().unwrap(), it.next().unwrap()]
-        };
+        let mut next = || it.next().ok_or_else(bad);
         Ok(match (name, n) {
-            ("Translate", 3) => TransformOp::Translate(next3(&mut it)),
-            ("Rotate_Origin", 4) => {
-                let v = next3(&mut it);
-                TransformOp::RotateOrigin(v, it.next().unwrap())
-            }
-            ("Rotate_X", 1) => TransformOp::RotateX(it.next().unwrap()),
-            ("Rotate_Y", 1) => TransformOp::RotateY(it.next().unwrap()),
-            ("Rotate_Z", 1) => TransformOp::RotateZ(it.next().unwrap()),
-            ("Scale", 1) => TransformOp::Scale(it.next().unwrap()),
-            ("Scale" | "Scale3", 3) => TransformOp::Scale3(next3(&mut it)),
-            ("Scale3", 1) => TransformOp::Scale(it.next().unwrap()),
+            ("Translate", 3) => TransformOp::Translate([next()?, next()?, next()?]),
+            ("Rotate_Origin", 4) => TransformOp::RotateOrigin([next()?, next()?, next()?], next()?),
+            ("Rotate_X", 1) => TransformOp::RotateX(next()?),
+            ("Rotate_Y", 1) => TransformOp::RotateY(next()?),
+            ("Rotate_Z", 1) => TransformOp::RotateZ(next()?),
+            ("Scale" | "Scale3", 1) => TransformOp::Scale(next()?),
+            ("Scale" | "Scale3", 3) => TransformOp::Scale3([next()?, next()?, next()?]),
             ("Matrix", 16) => {
-                let v: Vec<Scalar> = it.collect();
-                TransformOp::Matrix(Box::new(v.try_into().map_err(|_| bad())?))
+                let mut m: [Scalar; 16] = Default::default();
+                for s in &mut m {
+                    *s = next()?;
+                }
+                TransformOp::Matrix(Box::new(m))
             }
             _ => return Err(bad()),
         })

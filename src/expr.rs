@@ -1115,22 +1115,22 @@ mod bessel {
     }
 
     /// `J0(x)`.
-    pub fn j0(x: f64) -> f64 {
+    pub(crate) fn j0(x: f64) -> f64 {
         j01(x).0
     }
 
     /// `J1(x)`.
-    pub fn j1(x: f64) -> f64 {
+    pub(crate) fn j1(x: f64) -> f64 {
         j01(x).1
     }
 
     /// `Y0(x)` (NaN for negative arguments).
-    pub fn y0(x: f64) -> f64 {
+    pub(crate) fn y0(x: f64) -> f64 {
         y01(x).0
     }
 
     /// `Y1(x)` (NaN for negative arguments).
-    pub fn y1(x: f64) -> f64 {
+    pub(crate) fn y1(x: f64) -> f64 {
         y01(x).1
     }
 
@@ -1141,7 +1141,7 @@ mod bessel {
     }
 
     /// `J_n(x)` for integer `n`.
-    pub fn jn(n: f64, x: f64) -> f64 {
+    pub(crate) fn jn(n: f64, x: f64) -> f64 {
         let Some(n) = order(n) else { return f64::NAN };
         if x.is_nan() {
             return f64::NAN;
@@ -1195,7 +1195,7 @@ mod bessel {
     }
 
     /// `Y_n(x)` for integer `n` (NaN for negative `x`).
-    pub fn yn(n: f64, x: f64) -> f64 {
+    pub(crate) fn yn(n: f64, x: f64) -> f64 {
         let Some(n) = order(n) else { return f64::NAN };
         let sign_n = if n < 0 && n % 2 != 0 { -1.0 } else { 1.0 };
         let m = n.unsigned_abs();

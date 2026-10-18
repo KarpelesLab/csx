@@ -395,8 +395,9 @@ impl Property {
 
     /// Adds a primitive.
     pub fn add_primitive(&mut self, p: impl Into<Primitive>) -> &mut Primitive {
+        let i = self.primitives.len();
         self.primitives.push(p.into());
-        self.primitives.last_mut().expect("just pushed")
+        &mut self.primitives[i]
     }
 
     /// Value of a user attribute.
