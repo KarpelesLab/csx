@@ -120,3 +120,20 @@ the implementation:
   suffixes.
 * Weighting function variables: `x y z rho a r t`, in drawing units.
 * Expressions: any non-zero value is true.
+
+## Open items before 1.0
+
+1. Polygon vertices are plain `f64`; parametric vertices are evaluated on read
+   and lost on write. Consider `Vec<[Scalar; 2]>`.
+2. Public fields that can go stale (`UserDefined::function`, cached
+   `PolyhedronReader::mesh`, ...): make private with setters, or keep
+   `update()` as the documented contract everywhere.
+3. Raw `i32` type ids (excitation/probe/dump types, lumped direction) →
+   enums with an `Other(i32)` fallback.
+4. Unknown child elements of properties/primitives are dropped on XML
+   round-trip (attributes are preserved).
+5. `MAX_DEPTH` still bounds nested parentheses / unary chains; iterative
+   evaluation would remove the limit.
+6. Unconfirmed file-format guesses (Matrix convention, RotPoly, Polyhedron,
+   ParameterSet, UserDefined attribute names) need verification against
+   genuine CSXCAD output.
