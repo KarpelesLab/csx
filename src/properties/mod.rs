@@ -147,6 +147,10 @@ pub enum PropertyKind {
     Unknown {
         /// Free-form description.
         property: String,
+        /// Element name the property was read from when it was not
+        /// `<Unknown>` (e.g. a property type this crate does not model);
+        /// written back under the same name.
+        element: Option<String>,
     },
     /// Plain material.
     Material(Material),

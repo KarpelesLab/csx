@@ -31,8 +31,10 @@
 //!   `AbsorbingBoundaryType`; `<DiscMaterial>`: `File`, `Scale`.
 //!
 //! Property elements with an unknown name are read as
-//! [`PropertyKind::Unknown`](crate::PropertyKind::Unknown) whose `property`
-//! is the element name, and written back as `<Unknown Property="..">`.
+//! [`PropertyKind::Unknown`](crate::PropertyKind::Unknown) remembering the
+//! element name, and written back under that name with their attributes
+//! (child elements other than colours, attributes and primitives are not
+//! preserved).
 
 pub mod dom;
 mod fdtd;

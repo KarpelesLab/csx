@@ -223,7 +223,7 @@ pub(super) fn structure(el: &Element) -> Result<ContinuousStructure> {
     }
     if let Some(props) = el.child("Properties") {
         for p in props.elements() {
-            s.add_property(property(p)?);
+            s.add_property(property(p, &s.parameters)?);
         }
     }
     Ok(s)
@@ -285,7 +285,7 @@ fn grid(el: &Element, s: &mut ContinuousStructure) -> Result<()> {
     Ok(())
 }
 
-fn property(el: &Element) -> Result<Property> {
+fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
     let a = Attrs::new(el);
     a.get("ID");
     let name = a.get("Name").unwrap_or("").to_owned();
@@ -391,9 +391,11 @@ fn property(el: &Element) -> Result<Property> {
         }),
         "Unknown" => PropertyKind::Unknown {
             property: a.get("Property").unwrap_or("").to_owned(),
+            element: None,
         },
         other => PropertyKind::Unknown {
-            property: other.to_owned(),
+            property: a.get("Property").unwrap_or(other).to_owned(),
+            element: Some(other.to_owned()),
         },
     };
     let mut p = Property::new(name, kind);
@@ -405,7 +407,7 @@ fn property(el: &Element) -> Result<Property> {
     }
     if let Some(prims) = el.child("Primitives") {
         for q in prims.elements() {
-            p.primitives.push(primitive(q)?);
+            p.primitives.push(primitive(q, ps)?);
         }
     }
     let rest = a.rest();
@@ -552,10 +554,22 @@ fn probe(el: &Element, a: &Attrs<'_>) -> Result<ProbeBox> {
     Ok(p)
 }
 
-fn vertices_2d(el: &Element) -> Result<Vec<(f64, f64)>> {
+/// A coordinate that must be numeric in the model (polygon and polyhedron
+/// vertices): plain numbers, or expressions evaluated once against the
+/// file's parameters.
+fn coordinate(s: &str, ps: &ParameterSet, what: &str) -> Result<f64> {
+    match parse_number_lenient(s) {
+        Some(v) => Ok(v),
+        None => ps
+            .eval(term(s))
+            .map_err(|e| Error::Format(format!("{what}: {s:?}: {e}"))),
+    }
+}
+
+fn vertices_2d(el: &Element, ps: &ParameterSet) -> Result<Vec<(f64, f64)>> {
     el.children_named("Vertex")
         .map(|v| {
-            let c = |n: &str| v.attr(n).map_or(Ok(0.0), |s| number(s, n));
+            let c = |n: &str| v.attr(n).map_or(Ok(0.0), |s| coordinate(s, ps, n));
             Ok((c("X1")?, c("X2")?))
         })
         .collect()
@@ -574,17 +588,17 @@ fn axis(a: &Attrs<'_>, names: &[&str], default: usize) -> Result<usize> {
     }
 }
 
-fn polyhedron(el: &Element) -> Result<Polyhedron> {
+fn polyhedron(el: &Element, ps: &ParameterSet) -> Result<Polyhedron> {
     let mut verts = Vec::new();
     for v in el.children_named("Vertex") {
         let p = if v.attr("X").is_some() {
-            let c = |n: &str| v.attr(n).map_or(Ok(0.0), |s| number(s, n));
+            let c = |n: &str| v.attr(n).map_or(Ok(0.0), |s| coordinate(s, ps, n));
             Vec3::new(c("X")?, c("Y")?, c("Z")?)
         } else {
             let t = v.text();
             let c: Vec<f64> = split_list(&t)
                 .into_iter()
-                .map(|s| number(s, "Vertex"))
+                .map(|s| coordinate(s, ps, "Vertex"))
                 .collect::<Result<_>>()?;
             if c.len() != 3 {
                 return Err(Error::Format(format!("polyhedron vertex {t:?}")));
@@ -612,7 +626,7 @@ fn polyhedron(el: &Element) -> Result<Polyhedron> {
     Polyhedron::new(verts, faces)
 }
 
-fn primitive(el: &Element) -> Result<Primitive> {
+fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
     let a = Attrs::new(el);
     let need = |name: &str| -> Result<Scalar> {
         a.scalar(name)
@@ -658,7 +672,7 @@ fn primitive(el: &Element) -> Result<Primitive> {
             Shape::Polygon(Polygon {
                 norm_dir: axis(&a, &["NormDir"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
-                vertices: vertices_2d(el)?,
+                vertices: vertices_2d(el, ps)?,
             })
         }
         "LinPoly" => {
@@ -667,7 +681,7 @@ fn primitive(el: &Element) -> Result<Primitive> {
                 norm_dir: axis(&a, &["NormDir"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
                 length: a.scalar("Length").unwrap_or_default(),
-                vertices: vertices_2d(el)?,
+                vertices: vertices_2d(el, ps)?,
             })
         }
         "RotPoly" => {
@@ -676,7 +690,7 @@ fn primitive(el: &Element) -> Result<Primitive> {
                 norm_dir: axis(&a, &["NormDir"], 0)?,
                 rot_axis_dir: axis(&a, &["RotAxisDir", "RotAxis", "RotationAxis"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
-                vertices: vertices_2d(el)?,
+                vertices: vertices_2d(el, ps)?,
                 ..Default::default()
             };
             if let Some(ang) = el.child("Angles") {
@@ -713,7 +727,7 @@ fn primitive(el: &Element) -> Result<Primitive> {
             };
             Shape::Point(PointShape { point: p })
         }
-        "Polyhedron" => Shape::Polyhedron(polyhedron(el)?),
+        "Polyhedron" => Shape::Polyhedron(polyhedron(el, ps)?),
         "PolyhedronReader" => {
             let file_name = a.get("FileName").unwrap_or("").to_owned();
             let file_type = match a.get("FileType") {

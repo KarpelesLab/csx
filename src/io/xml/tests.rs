@@ -222,6 +222,13 @@ fn read_sample() {
 
     let weird = s.property_by_name("weird").unwrap();
     assert_eq!(weird.property_type(), PropertyType::Unknown);
+    // Regression: foreign property elements were renamed to <Unknown>.
+    let out = s.to_xml_string();
+    assert!(
+        out.contains("<ResBox ") && out.contains("Foo=\"bar\""),
+        "{out}"
+    );
+    assert!(!out.contains("Property=\"ResBox\""));
     assert_eq!(s.parameters.get("h"), Some(1.524));
 }
 
@@ -288,6 +295,34 @@ fn degree_transforms_written_in_radians() {
     assert!(!p.transform.angles_in_degrees());
     let q = p.transform.apply(Vec3::unit(0));
     assert!((q - Vec3::unit(1)).norm() < 1e-12);
+}
+
+#[test]
+fn vertex_expressions() {
+    // Regression: expression-valued vertices made the whole file unreadable.
+    let xml = r#"<ContinuousStructure CoordSystem="0">
+      <Properties>
+        <Metal Name="m"><Primitives>
+          <Polygon Priority="1" NormDir="2" Elevation="0">
+            <Vertex X1="0" X2="0"/><Vertex X1="w/2" X2="0"/><Vertex X1="w/2" X2="w"/>
+          </Polygon>
+          <Polyhedron><Vertex>0,0,0</Vertex><Vertex>w,0,0</Vertex><Vertex>0,w,0</Vertex>
+            <Face>0,1,2</Face></Polyhedron>
+        </Primitives></Metal>
+      </Properties>
+      <ParameterSet><Parameter Type="Const" name="w" value="4"/></ParameterSet>
+    </ContinuousStructure>"#;
+    let s = ContinuousStructure::from_xml_str(xml).unwrap();
+    let p = &s.property_by_name("m").unwrap().primitives;
+    let Shape::Polygon(poly) = &p[0].shape else {
+        panic!()
+    };
+    assert_eq!(poly.vertices, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 4.0)]);
+    let Shape::Polyhedron(ph) = &p[1].shape else {
+        panic!()
+    };
+    assert_eq!(ph.vertices()[1], Vec3::new(4.0, 0.0, 0.0));
+    assert!(ContinuousStructure::from_xml_str(&xml.replace("w/2", "q/2")).is_err());
 }
 
 #[test]

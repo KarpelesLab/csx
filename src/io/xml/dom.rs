@@ -176,6 +176,19 @@ fn escape_into(out: &mut String, s: &str, attr: bool) {
     }
 }
 
+/// True if `name` can be written as an element or attribute name (as
+/// accepted by [`parse`]).
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.bytes().any(|c| {
+            c.is_ascii_whitespace()
+                || matches!(
+                    c,
+                    b'/' | b'>' | b'=' | b'<' | b'"' | b'\'' | b'&' | b'!' | b'?'
+                )
+        })
+}
+
 /// Parses a document and returns its root element.
 pub fn parse(src: &str) -> Result<Element> {
     let mut p = Parser {

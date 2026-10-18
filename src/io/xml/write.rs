@@ -109,6 +109,9 @@ fn parameters(ps: &ParameterSet) -> Element {
 
 fn property(p: &Property, index: usize) -> Element {
     let mut el = Element::new(match &p.kind {
+        PropertyKind::Unknown {
+            element: Some(e), ..
+        } if super::dom::is_valid_name(e) => e.as_str(),
         PropertyKind::Unknown { .. } => "Unknown",
         k => k.type_name(),
     });
@@ -123,7 +126,13 @@ fn property(p: &Property, index: usize) -> Element {
     ];
 
     match &p.kind {
-        PropertyKind::Unknown { property } => el.set_attr("Property", property.clone()),
+        PropertyKind::Unknown { property, element } => {
+            // A foreign element keeps its own name; `Property` is only
+            // needed when it carries information beyond that name.
+            if element.as_deref() != Some(property.as_str()) {
+                el.set_attr("Property", property.clone());
+            }
+        }
         PropertyKind::Material(m) => material(&mut el, &mut children, m, &[]),
         PropertyKind::LorentzMaterial(m) => {
             let names = [
