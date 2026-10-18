@@ -80,3 +80,36 @@ XML files consumed/produced by CSXCAD and openEMS.
 10. **Mesh file readers** — STL/PLY for `PolyhedronReader`.
 11. **Polish** — docs, examples, benches, fuzz-style robustness tests,
     performance (BVH for polyhedra, per-property bbox culling).
+
+## Status
+
+| Milestone | State |
+|---|---|
+| 1. Scaffold | done |
+| 2. Core math & coordinates | done |
+| 3. Expressions & parameters | done |
+| 4. Transformations | done |
+| 5. Primitives | done (BVH acceleration in progress) |
+| 6. Properties | done |
+| 7. ContinuousStructure | done |
+| 8. Rectilinear grid | done (automatic mesh generation in progress) |
+| 9. XML I/O | in progress |
+| 10. Mesh file readers (STL/PLY) | done |
+| 11. Polish | in progress |
+
+### Compatibility notes
+
+Facts confirmed from public documentation / published XML output that shaped
+the implementation:
+
+* Only `Box` (and `MultiBox`) interpret their coordinates in the primitive's
+  coordinate system (cylindrical boxes are annular sectors); all other
+  primitives are always Cartesian.
+* Transformations are applied in list order; rotation angles are radians in
+  files.
+* Polygon vertices `(X1, X2)` map to axes `(n+1)%3, (n+2)%3` for normal `n`.
+* Material values are written as one or three comma separated values; with
+  `Isotropy="1"` only the first is used. Debye terms use 1-based `_n`
+  suffixes.
+* Weighting function variables: `x y z rho a r t`, in drawing units.
+* Expressions: any non-zero value is true.

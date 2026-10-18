@@ -14,6 +14,19 @@ compatible with [CSXCAD](https://openems.de) and openEMS.
 
 Status: early development — see [PLAN.md](PLAN.md).
 
+## Overview
+
+* Geometric primitives: box, multi-box, sphere, spherical shell, cylinder,
+  cylindrical shell, polygon, extruded polygon, revolved polygon, curve, wire,
+  point, polyhedron (inline or STL/PLY file) and expression-defined regions,
+  with transformations and Cartesian/cylindrical coordinates.
+* Properties: materials (anisotropic, position-weighted), Drude/Lorentz and
+  Debye dispersive materials, metals, conducting sheets, excitations,
+  probes, field dumps, lumped elements.
+* Parametric models: every value may be an expression over named parameters.
+* Priority-based point queries (`property_at`, `medium_at`) and spatial index.
+* Rectilinear grids with graded smoothing.
+
 ## Features
 
 | feature | default | description |
