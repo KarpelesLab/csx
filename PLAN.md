@@ -87,15 +87,22 @@ XML files consumed/produced by CSXCAD and openEMS.
 |---|---|
 | 1. Scaffold | done |
 | 2. Core math & coordinates | done |
-| 3. Expressions & parameters | done |
+| 3. Expressions & parameters | done (incl. Bessel extensions, depth limits) |
 | 4. Transformations | done |
-| 5. Primitives | done (BVH acceleration in progress) |
+| 5. Primitives | done (BVH-accelerated polyhedra) |
 | 6. Properties | done |
-| 7. ContinuousStructure | done |
-| 8. Rectilinear grid | done (automatic mesh generation in progress) |
-| 9. XML I/O | in progress |
+| 7. ContinuousStructure | done (BVH spatial index) |
+| 8. Rectilinear grid | done (graded smoothing, automatic mesh generation in `mesh`) |
+| 9. XML I/O | done (round-trips 39 real-world files; typed `<FDTD>` settings in `fdtd`) |
 | 10. Mesh file readers (STL/PLY) | done |
-| 11. Polish | in progress |
+| 11. Polish | ongoing |
+
+Beyond the original plan:
+
+* `tessellate` + `io::export`: triangle meshes of every primitive, STL/PLY/VTK export.
+* `discretize`: sampling materials, PEC/sheets, excitations and lumped elements
+  onto the Yee grid.
+* `fdtd`: typed openEMS simulation settings, excitation signals, boundaries.
 
 ### Compatibility notes
 

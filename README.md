@@ -25,7 +25,22 @@ Status: early development — see [PLAN.md](PLAN.md).
   probes, field dumps, lumped elements.
 * Parametric models: every value may be an expression over named parameters.
 * Priority-based point queries (`property_at`, `medium_at`) and spatial index.
-* Rectilinear grids with graded smoothing.
+* Rectilinear grids with graded smoothing and automatic mesh generation from
+  the geometry (`mesh`).
+* Read/write CSXCAD and openEMS XML files, including typed FDTD settings
+  (feature `xml`).
+* Tessellation of primitives and STL/PLY/VTK export; STL/PLY import.
+* Discretisation of materials, metals, excitations and lumped elements onto
+  the FDTD grid (`discretize`).
+
+## Example
+
+```rust,ignore
+let model = csx::ContinuousStructure::read_file("patch.xml")?;
+let hit = model.property_at(csx::Vec3::new(0.0, 0.0, 0.5), csx::CoordSystem::Cartesian, csx::TypeMask::ANY);
+```
+
+See `cargo run --example info -- file.xml`.
 
 ## Features
 
