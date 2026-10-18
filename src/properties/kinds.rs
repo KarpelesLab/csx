@@ -322,6 +322,27 @@ impl Default for Excitation {
 }
 
 impl Excitation {
+    /// Soft E-field excitation (type 0) with the given excitation vector.
+    pub fn new(excite: [f64; 3]) -> Self {
+        Excitation {
+            excite: excite.map(Scalar::new),
+            ..Default::default()
+        }
+    }
+
+    /// Builder: excitation type (0 = soft E, 1 = hard E, 2 = soft H,
+    /// 3 = hard H, 10 = plane wave).
+    pub fn with_type(mut self, excitation_type: i32) -> Self {
+        self.excitation_type = excitation_type;
+        self
+    }
+
+    /// Builder: port / excitation number.
+    pub fn with_number(mut self, number: u32) -> Self {
+        self.number = number;
+        self
+    }
+
     /// Weighted excitation amplitude along `dir` at `p`.
     pub fn amplitude_at(&self, dir: usize, p: Vec3) -> f64 {
         self.excite[dir].value() * self.weight[dir].eval(p)
@@ -357,6 +378,35 @@ pub struct ProbeBox {
     pub frequencies: Vec<f64>,
 }
 
+impl ProbeBox {
+    /// Probe of the given type (0 = voltage, 1 = current, 2 = E, 3 = H,
+    /// 10/11 = waveguide voltage/current).
+    pub fn new(probe_type: i32) -> Self {
+        ProbeBox {
+            probe_type,
+            ..Default::default()
+        }
+    }
+
+    /// Builder: result weight.
+    pub fn with_weight(mut self, w: f64) -> Self {
+        self.weight = Scalar::new(w);
+        self
+    }
+
+    /// Builder: normal direction.
+    pub fn with_norm_dir(mut self, d: i32) -> Self {
+        self.norm_dir = Some(d);
+        self
+    }
+
+    /// Builder: frequency-domain samples.
+    pub fn with_frequencies(mut self, f: impl IntoIterator<Item = f64>) -> Self {
+        self.frequencies = f.into_iter().collect();
+        self
+    }
+}
+
 impl Default for ProbeBox {
     fn default() -> Self {
         ProbeBox {
@@ -390,6 +440,22 @@ pub struct DumpBox {
     pub opt_resolution: Option<[Scalar; 3]>,
     /// Multi-grid level.
     pub multi_grid_level: i32,
+}
+
+impl DumpBox {
+    /// Dump of the given type (0 = E, 1 = H, ...; see [`DumpBox::dump_type`]).
+    pub fn new(dump_type: i32) -> Self {
+        DumpBox {
+            dump_type,
+            ..Default::default()
+        }
+    }
+
+    /// Builder: file type (0 = VTK, 1 = HDF5).
+    pub fn with_file_type(mut self, file_type: i32) -> Self {
+        self.file_type = file_type;
+        self
+    }
 }
 
 impl Default for DumpBox {
@@ -437,6 +503,28 @@ impl Default for LumpedElement {
 }
 
 impl LumpedElement {
+    /// Element along axis `direction` with resistance `r` (Ω); C and L
+    /// unset.
+    pub fn resistor(direction: i32, r: f64) -> Self {
+        LumpedElement {
+            direction,
+            r: Scalar::new(r),
+            ..Default::default()
+        }
+    }
+
+    /// Builder: capacitance (F).
+    pub fn with_c(mut self, c: f64) -> Self {
+        self.c = Scalar::new(c);
+        self
+    }
+
+    /// Builder: inductance (H).
+    pub fn with_l(mut self, l: f64) -> Self {
+        self.l = Scalar::new(l);
+        self
+    }
+
     pub(crate) fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.r.update(p)?;
         self.c.update(p)?;

@@ -8,7 +8,7 @@ pub use kinds::*;
 pub use weight::{Aniso, WEIGHT_VARS, WeightFn, weight_vars};
 
 use crate::error::Result;
-use crate::param::ParameterSet;
+use crate::param::{ParameterSet, Scalar};
 use crate::primitives::Primitive;
 
 /// An RGBA colour.
@@ -318,6 +318,58 @@ impl Property {
         Property::new(name, PropertyKind::Metal)
     }
 
+    /// New excitation.
+    pub fn excitation(name: impl Into<String>, e: Excitation) -> Self {
+        Property::new(name, PropertyKind::Excitation(e))
+    }
+
+    /// New probe.
+    pub fn probe(name: impl Into<String>, p: ProbeBox) -> Self {
+        Property::new(name, PropertyKind::ProbeBox(p))
+    }
+
+    /// New field dump.
+    pub fn dump(name: impl Into<String>, d: DumpBox) -> Self {
+        Property::new(name, PropertyKind::DumpBox(d))
+    }
+
+    /// New lumped element.
+    pub fn lumped_element(name: impl Into<String>, l: LumpedElement) -> Self {
+        Property::new(name, PropertyKind::LumpedElement(l))
+    }
+
+    /// New conducting sheet with conductivity (S/m) and thickness (m).
+    pub fn conducting_sheet(
+        name: impl Into<String>,
+        conductivity: impl Into<Scalar>,
+        thickness: impl Into<Scalar>,
+    ) -> Self {
+        Property::new(
+            name,
+            PropertyKind::ConductingSheet(ConductingSheet {
+                conductivity: conductivity.into(),
+                thickness: thickness.into(),
+            }),
+        )
+    }
+
+    /// New Drude/Lorentz dispersive material.
+    pub fn lorentz_material(name: impl Into<String>, m: LorentzMaterial) -> Self {
+        Property::new(name, PropertyKind::LorentzMaterial(m))
+    }
+
+    /// New Debye dispersive material.
+    pub fn debye_material(name: impl Into<String>, m: DebyeMaterial) -> Self {
+        Property::new(name, PropertyKind::DebyeMaterial(m))
+    }
+
+    /// Builder: sets fill and edge colour.
+    pub fn with_color(mut self, c: Rgba) -> Self {
+        self.fill_color = c;
+        self.edge_color = c;
+        self
+    }
+
     /// Unique id within the owning structure (0 for detached properties).
     pub fn id(&self) -> u32 {
         self.id
@@ -399,6 +451,41 @@ mod tests {
             m.values_at(MaterialQuantity::Epsilon, Vec3::ZERO),
             [4.0, 4.0, 4.0]
         );
+    }
+
+    #[test]
+    fn constructors() {
+        let e = Property::excitation(
+            "port",
+            Excitation::new([0.0, 0.0, 1.0]).with_type(1).with_number(2),
+        );
+        let PropertyKind::Excitation(x) = &e.kind else {
+            panic!()
+        };
+        assert_eq!(
+            (x.excitation_type, x.number, x.excite[2].value()),
+            (1, 2, 1.0)
+        );
+        assert!(x.enabled);
+        let l = LumpedElement::resistor(2, 50.0).with_c(1e-12);
+        assert!(l.l.value().is_nan() && l.c.value() == 1e-12);
+        assert_eq!(
+            Property::lumped_element("r", l.clone()).kind,
+            PropertyKind::LumpedElement(l)
+        );
+        let p = Property::probe(
+            "u",
+            ProbeBox::new(0).with_weight(-1.0).with_frequencies([1e9]),
+        );
+        assert_eq!(p.property_type(), PropertyType::ProbeBox);
+        assert_eq!(
+            Property::dump("et", DumpBox::new(10)).property_type(),
+            PropertyType::DumpBox
+        );
+        let c = Property::conducting_sheet("cu", 5.8e7, 35e-6).with_color(Rgba::new(1, 2, 3, 255));
+        assert_eq!(c.fill_color, c.edge_color);
+        let pt: crate::ScalarPoint = ["w/2", "1", "h"].into();
+        assert!(pt.0[0].is_expr() && !pt.0[1].is_expr());
     }
 
     #[test]

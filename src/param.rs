@@ -281,6 +281,19 @@ impl From<crate::Vec3> for ScalarPoint {
     }
 }
 
+impl From<[&str; 3]> for ScalarPoint {
+    /// Coordinates given as expressions (plain numbers become constants).
+    fn from(v: [&str; 3]) -> Self {
+        ScalarPoint(v.map(Scalar::expr))
+    }
+}
+
+impl From<[Scalar; 3]> for ScalarPoint {
+    fn from(v: [Scalar; 3]) -> Self {
+        ScalarPoint(v)
+    }
+}
+
 impl From<[f64; 3]> for ScalarPoint {
     fn from(v: [f64; 3]) -> Self {
         ScalarPoint::new(v[0], v[1], v[2])
