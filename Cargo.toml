@@ -21,3 +21,7 @@ xml = []
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+
+[[example]]
+name = "info"
+required-features = ["xml"]
