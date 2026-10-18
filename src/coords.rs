@@ -10,7 +10,8 @@
 //! * **Axis indices** are `usize`: `0` = x (or ρ), `1` = y (or α),
 //!   `2` = z. They index [`Vec3`] components, grid line sets, material axes,
 //!   polygon normals and so on. [`crate::Axis`] is the typed equivalent used
-//!   by a few property fields.
+//!   by a few property fields; it converts to an index with `.into()`
+//!   (`grid.lines(Axis::Z.into())`) where a named axis reads better.
 //! * **Lengths** are in *drawing units*; the mesh's
 //!   [`crate::RectilinearGrid::delta_unit`] gives the size of one unit in
 //!   metres. Material parameters are in SI units.
