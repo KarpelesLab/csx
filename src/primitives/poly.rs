@@ -30,6 +30,9 @@ fn check_dir(d: usize, what: &str) -> Result<()> {
 }
 
 fn verts_bbox(n: usize, verts: &[(f64, f64)], lo: f64, hi: f64) -> BoundingBox {
+    if n > 2 {
+        return BoundingBox::EMPTY;
+    }
     let (u, v) = plane_axes(n);
     let mut b = BoundingBox::EMPTY;
     for &(a, c) in verts {
@@ -67,6 +70,9 @@ impl Polygon {
 
     pub(crate) fn inside(&self, p: Vec3) -> bool {
         let n = self.norm_dir;
+        if n > 2 {
+            return false;
+        }
         let (u, v) = plane_axes(n);
         let e = self.elevation.value();
         in_range(p[n], e, e) && point_in_polygon((p[u], p[v]), &self.vertices)
@@ -127,6 +133,9 @@ impl LinPoly {
 
     pub(crate) fn inside(&self, p: Vec3) -> bool {
         let n = self.norm_dir;
+        if n > 2 {
+            return false;
+        }
         let (u, v) = plane_axes(n);
         let e = self.elevation.value();
         let l = self.length.value();
@@ -201,6 +210,11 @@ impl RotPoly {
         }
     }
 
+    /// True if the axes are valid (both in 0..=2 and distinct).
+    fn axes_valid(&self) -> bool {
+        self.norm_dir < 3 && self.rot_axis_dir < 3 && self.norm_dir != self.rot_axis_dir
+    }
+
     /// Radial axis and the unit vector of positive rotation from it.
     fn frame(&self) -> (usize, Vec3) {
         let a = self.rot_axis_dir;
@@ -218,6 +232,9 @@ impl RotPoly {
     }
 
     pub(crate) fn inside(&self, p: Vec3) -> bool {
+        if !self.axes_valid() {
+            return false;
+        }
         let a = self.rot_axis_dir;
         let (q, w) = self.frame();
         let h = p[a];
@@ -235,6 +252,9 @@ impl RotPoly {
     }
 
     pub(crate) fn bbox(&self) -> BoundingBox {
+        if !self.axes_valid() {
+            return BoundingBox::EMPTY;
+        }
         let a = self.rot_axis_dir;
         let (q, w) = self.frame();
         let (u, _) = plane_axes(self.norm_dir);

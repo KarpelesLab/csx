@@ -47,7 +47,7 @@ pub(crate) fn sector_bbox(r: (f64, f64), a: (f64, f64), z: (f64, f64)) -> Boundi
         // Cardinal directions inside the angular interval.
         let first = (a1 / FRAC_PI_2).ceil() as i64;
         let last = (a2 / FRAC_PI_2).floor() as i64;
-        for k in first..=last.min(first + 4) {
+        for k in first..=last.min(first.saturating_add(4)) {
             add(k as f64 * FRAC_PI_2);
         }
     }
