@@ -200,6 +200,9 @@ enum Node {
     Slot(usize),
     Unary(UnOp, Box<Node>),
     Binary(BinOp, Box<Node>, Box<Node>),
+    /// Left-to-right chain `first op1 n1 op2 n2 ...`, i.e.
+    /// `((first op1 n1) op2 n2) ...`; keeps long operator chains shallow.
+    Chain(Box<Node>, Vec<(BinOp, Node)>),
     Call(Func, Vec<Node>),
 }
 
@@ -229,6 +232,17 @@ impl Node {
                 }
                 let b = b.eval(slots, lookup)?;
                 binop(*op, a, b)
+            }
+            Node::Chain(first, rest) => {
+                let mut acc = first.eval(slots, lookup)?;
+                for (op, n) in rest {
+                    acc = match op {
+                        BinOp::And if !truthy(acc) => 0.0,
+                        BinOp::Or if truthy(acc) => 1.0,
+                        _ => binop(*op, acc, n.eval(slots, lookup)?),
+                    };
+                }
+                acc
             }
             Node::Call(Func::If, args) => {
                 if truthy(args[0].eval(slots, lookup)?) {
@@ -263,6 +277,17 @@ impl Node {
                     _ => binop(*op, a, b.eval_fast(slots)),
                 }
             }
+            Node::Chain(first, rest) => {
+                let mut acc = first.eval_fast(slots);
+                for (op, n) in rest {
+                    acc = match op {
+                        BinOp::And if !truthy(acc) => 0.0,
+                        BinOp::Or if truthy(acc) => 1.0,
+                        _ => binop(*op, acc, n.eval_fast(slots)),
+                    };
+                }
+                acc
+            }
             Node::Call(Func::If, args) => {
                 if truthy(args[0].eval_fast(slots)) {
                     args[1].eval_fast(slots)
@@ -290,6 +315,10 @@ impl Node {
                 a.collect_names(out);
                 b.collect_names(out);
             }
+            Node::Chain(first, rest) => {
+                first.collect_names(out);
+                rest.iter().for_each(|(_, n)| n.collect_names(out));
+            }
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_names(out)),
             Node::Num(_) | Node::Slot(_) => {}
         }
@@ -315,6 +344,12 @@ impl Node {
                 Box::new(a.resolve(vars, lookup)?),
                 Box::new(b.resolve(vars, lookup)?),
             )),
+            Node::Chain(first, rest) => fold(Node::Chain(
+                Box::new(first.resolve(vars, lookup)?),
+                rest.iter()
+                    .map(|(op, n)| Ok((*op, n.resolve(vars, lookup)?)))
+                    .collect::<Result<_>>()?,
+            )),
             Node::Call(f, args) => fold(Node::Call(
                 *f,
                 args.iter()
@@ -329,6 +364,9 @@ fn fold(n: Node) -> Node {
     let constant = match &n {
         Node::Unary(_, a) => matches!(**a, Node::Num(_)),
         Node::Binary(_, a, b) => matches!(**a, Node::Num(_)) && matches!(**b, Node::Num(_)),
+        Node::Chain(a, rest) => {
+            matches!(**a, Node::Num(_)) && rest.iter().all(|(_, n)| matches!(n, Node::Num(_)))
+        }
         Node::Call(_, args) => args.iter().all(|a| matches!(a, Node::Num(_))),
         _ => false,
     };
@@ -477,8 +515,9 @@ impl CompiledExpr {
 ///
 /// Parsing, evaluation and dropping of expression trees are recursive, so
 /// untrusted input is bounded to keep stack use small (well below 1 MiB
-/// even in debug builds). Each parenthesis level counts twice; each term of
-/// a left-associative chain such as `a+b+c` counts once.
+/// even in debug builds). Each parenthesis level counts twice; chains of
+/// binary operators such as `a+b+c+...` are stored flat and count once
+/// regardless of their length.
 pub const MAX_DEPTH: usize = 256;
 
 struct Parser<'a> {
@@ -559,7 +598,11 @@ impl Parser<'_> {
 
     fn parse_expr(&mut self, min_bp: u8) -> Result<(Node, usize)> {
         self.enter()?;
-        let (mut lhs, mut d) = self.parse_unary()?;
+        let (lhs, mut d) = self.parse_unary()?;
+        // Every operator consumed by this loop applies to the accumulated
+        // left-hand side, so the sequence is stored as a flat chain that is
+        // evaluated left to right.
+        let mut rest = Vec::new();
         while let Some((op, bp, len)) = self.peek_binop() {
             if bp < min_bp {
                 break;
@@ -571,13 +614,18 @@ impl Parser<'_> {
             } else {
                 self.parse_expr(bp + 1)?
             };
-            (lhs, d) = self.node(
-                Node::Binary(op, Box::new(lhs), Box::new(rhs)),
-                d.max(rd) + 1,
-            )?;
+            d = d.max(rd);
+            rest.push((op, rhs));
         }
         self.rec -= 1;
-        Ok((lhs, d))
+        match rest.len() {
+            0 => Ok((lhs, d)),
+            1 => {
+                let (op, rhs) = rest.pop().expect("one element");
+                self.node(Node::Binary(op, Box::new(lhs), Box::new(rhs)), d + 1)
+            }
+            _ => self.node(Node::Chain(Box::new(lhs), rest), d + 1),
+        }
     }
 
     /// Right-hand side of `^`: allows a unary sign (`2^-1`) and is right
@@ -1125,6 +1173,11 @@ mod tests {
         assert_eq!(ev("7%4"), 3.0);
         assert_eq!(ev(" 1.5e3 + .5 "), 1500.5);
         assert_eq!(ev("--3"), 3.0);
+        assert_eq!(ev("1*2+3*4-5/5"), 13.0);
+        assert_eq!(ev("2-3+4"), 3.0);
+        let long = vec!["1"; 5000].join("+");
+        assert_eq!(ev(&long), 5000.0);
+        assert_eq!(ev("0 & (1/0) | 2"), 1.0);
     }
 
     #[test]

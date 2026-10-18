@@ -77,7 +77,6 @@ fn expr_deep_nesting_is_rejected_not_overflowed() {
         format!("{}1{}", "(".repeat(n), ")".repeat(n)),
         format!("{}1", "-".repeat(n)),
         format!("{}1", "!".repeat(n)),
-        "1+".repeat(n) + "1",
         "2^".repeat(n) + "2",
         "2^-".repeat(n) + "2",
         "sin(".repeat(n) + "1" + &")".repeat(n),
@@ -86,12 +85,14 @@ fn expr_deep_nesting_is_rejected_not_overflowed() {
     }
     // Expressions close to the limit still parse and evaluate on a default
     // (2 MiB) test thread stack. Each parenthesis level costs two levels of
-    // parser recursion; a left-associative sum adds one tree level per term.
+    // parser recursion; operator chains are flat and unbounded in length.
     let d = MAX_DEPTH / 2 - 2;
     let s = format!("{}x{}", "(".repeat(d), ")".repeat(d));
     let e = Expr::parse(&s).unwrap();
     assert_eq!(e.eval_with(|_| Some(1.0)).unwrap(), 1.0);
     assert_eq!(e.compile(&["x"], |_| None).unwrap().eval(&[2.0]), 2.0);
+    let e = Expr::parse(&("1+".repeat(n) + "1")).unwrap();
+    assert_eq!(e.eval_const().unwrap(), (n + 1) as f64);
     let d = MAX_DEPTH - 2;
     let s = "x+".repeat(d) + "1";
     let e = Expr::parse(&s).unwrap();
