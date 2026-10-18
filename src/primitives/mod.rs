@@ -893,4 +893,23 @@ mod tests {
         assert_eq!(nb.min, Vec3::new(1.0, -1.0, 0.0));
         assert_eq!(nb.max, Vec3::new(2.0, 1.0, 1.0));
     }
+
+    #[test]
+    fn constructors() {
+        let m = MultiBox::new([
+            ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+            ([2.0, 0.0, 0.0], [3.0, 1.0, 1.0]),
+        ]);
+        let mut n = MultiBox::default();
+        n.push([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        n.push([2.0, 0.0, 0.0], [3.0, 1.0, 1.0]);
+        assert_eq!(m, n);
+        assert!(Primitive::new(m).contains(Vec3::new(2.5, 0.5, 0.5), CoordSystem::Cartesian));
+        let s = SphericalShell::new([0.0, 0.0, 0.0], 1.0, 0.2);
+        assert_eq!(s.shell_width.value(), 0.2);
+        let c = CylindricalShell::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 0.2);
+        assert!(Primitive::new(c).contains(Vec3::new(1.05, 0.0, 0.5), CoordSystem::Cartesian));
+        let u = UserDefined::new("x < 0").with_base([1.0, 0.0, 0.0]);
+        assert!(Primitive::new(u).contains(Vec3::new(0.5, 0.0, 0.0), CoordSystem::Cartesian));
+    }
 }

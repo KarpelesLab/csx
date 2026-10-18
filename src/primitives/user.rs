@@ -43,6 +43,13 @@ impl UserDefined {
         u
     }
 
+    /// Builder: sets the origin of the local coordinates.
+    #[must_use]
+    pub fn with_base(mut self, base: impl Into<ScalarPoint>) -> Self {
+        self.base = base.into();
+        self
+    }
+
     /// The defining expression.
     pub fn function(&self) -> &str {
         &self.function

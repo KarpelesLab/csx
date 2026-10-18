@@ -376,10 +376,7 @@ impl Property {
     ) -> Self {
         Property::new(
             name,
-            PropertyKind::ConductingSheet(ConductingSheet {
-                conductivity: conductivity.into(),
-                thickness: thickness.into(),
-            }),
+            PropertyKind::ConductingSheet(ConductingSheet::new(conductivity, thickness)),
         )
     }
 
@@ -391,6 +388,16 @@ impl Property {
     /// New Debye dispersive material.
     pub fn debye_material(name: impl Into<String>, m: DebyeMaterial) -> Self {
         Property::new(name, PropertyKind::DebyeMaterial(m))
+    }
+
+    /// New discrete (voxel file) material.
+    pub fn disc_material(name: impl Into<String>, m: DiscMaterial) -> Self {
+        Property::new(name, PropertyKind::DiscMaterial(m))
+    }
+
+    /// New absorbing boundary condition sheet.
+    pub fn absorbing_bc(name: impl Into<String>, a: AbsorbingBC) -> Self {
+        Property::new(name, PropertyKind::AbsorbingBC(a))
     }
 
     /// Builder: sets fill and edge colour.

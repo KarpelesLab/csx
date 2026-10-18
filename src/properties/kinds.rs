@@ -212,6 +212,17 @@ pub struct DebyePole {
     pub eps_relax_time: Aniso,
 }
 
+impl DebyePole {
+    /// Isotropic pole with permittivity step `eps_delta` and relaxation time
+    /// `relax_time` (s).
+    pub fn new(eps_delta: f64, relax_time: f64) -> Self {
+        DebyePole {
+            eps_delta: Aniso::iso(eps_delta),
+            eps_relax_time: Aniso::iso(relax_time),
+        }
+    }
+}
+
 impl Default for DebyePole {
     fn default() -> Self {
         DebyePole {
@@ -286,6 +297,16 @@ pub struct ConductingSheet {
     pub conductivity: Scalar,
     /// Sheet thickness (m).
     pub thickness: Scalar,
+}
+
+impl ConductingSheet {
+    /// Sheet with conductivity (S/m) and thickness (m).
+    pub fn new(conductivity: impl Into<Scalar>, thickness: impl Into<Scalar>) -> Self {
+        ConductingSheet {
+            conductivity: conductivity.into(),
+            thickness: thickness.into(),
+        }
+    }
 }
 
 /// Field excitation.

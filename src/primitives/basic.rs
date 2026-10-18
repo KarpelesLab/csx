@@ -98,6 +98,23 @@ pub struct MultiBox {
 }
 
 impl MultiBox {
+    /// Union of the boxes given by pairs of opposite corners.
+    pub fn new<A: Into<ScalarPoint>, B: Into<ScalarPoint>>(
+        boxes: impl IntoIterator<Item = (A, B)>,
+    ) -> Self {
+        MultiBox {
+            boxes: boxes
+                .into_iter()
+                .map(|(a, b)| (a.into(), b.into()))
+                .collect(),
+        }
+    }
+
+    /// Adds a box.
+    pub fn push(&mut self, start: impl Into<ScalarPoint>, stop: impl Into<ScalarPoint>) {
+        self.boxes.push((start.into(), stop.into()));
+    }
+
     /// Inside test for the Cartesian point `p`, corners in `cs`.
     pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
         self.inside_native(cs.from_cartesian(p))
@@ -199,6 +216,20 @@ pub struct SphericalShell {
 }
 
 impl SphericalShell {
+    /// Shell around `center` with mid-surface radius `radius` and total
+    /// thickness `shell_width`.
+    pub fn new(
+        center: impl Into<ScalarPoint>,
+        radius: impl Into<Scalar>,
+        shell_width: impl Into<Scalar>,
+    ) -> Self {
+        SphericalShell {
+            center: center.into(),
+            radius: radius.into(),
+            shell_width: shell_width.into(),
+        }
+    }
+
     pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
         let c = cs.to_cartesian(self.center.value());
         let (r, w) = (self.radius.value(), self.shell_width.value().abs() / 2.0);
@@ -325,6 +356,22 @@ pub struct CylindricalShell {
 }
 
 impl CylindricalShell {
+    /// Shell around the axis `start`–`stop` with mid-surface radius
+    /// `radius` and total thickness `shell_width`.
+    pub fn new(
+        start: impl Into<ScalarPoint>,
+        stop: impl Into<ScalarPoint>,
+        radius: impl Into<Scalar>,
+        shell_width: impl Into<Scalar>,
+    ) -> Self {
+        CylindricalShell {
+            start: start.into(),
+            stop: stop.into(),
+            radius: radius.into(),
+            shell_width: shell_width.into(),
+        }
+    }
+
     pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
         let (a, b) = (
             cs.to_cartesian(self.start.value()),
