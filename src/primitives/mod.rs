@@ -347,6 +347,9 @@ impl Primitive {
     pub fn contains_in(&self, p: Vec3, p_cs: CoordSystem, default_cs: CoordSystem) -> bool {
         let mut c = p_cs.to_cartesian(p);
         if !self.transform.is_empty() {
+            if !self.transform.is_invertible() {
+                return false;
+            }
             c = self.transform.apply_inverse(c);
         }
         self.shape.contains_local(c, self.effective_cs(default_cs))
@@ -361,7 +364,9 @@ impl Primitive {
     /// World-space Cartesian bounding box.
     pub fn bounding_box(&self, default_cs: CoordSystem) -> BoundingBox {
         let b = self.shape.local_bbox(self.effective_cs(default_cs));
-        if self.transform.is_empty() {
+        if self.transform.is_empty() || b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
+            // Unbounded shapes stay unbounded (transforming infinite corners
+            // would produce NaN).
             b
         } else {
             b.transformed(self.transform.matrix())
@@ -378,7 +383,10 @@ impl Primitive {
             && self.transform.is_empty()
             && let Some(b) = self.shape.native_bbox()
         {
-            return b;
+            return match target {
+                CoordSystem::Cartesian => b,
+                CoordSystem::Cylindrical => normalize_alpha(b),
+            };
         }
         let b = self.bounding_box(default_cs);
         match target {
@@ -399,10 +407,28 @@ impl Primitive {
     }
 }
 
+/// Shifts the angular range of a cylindrical box so that it starts in
+/// `[-π, π)`; ranges of a full turn or more become `[-π, π]`.
+fn normalize_alpha(mut b: BoundingBox) -> BoundingBox {
+    use core::f64::consts::{PI, TAU};
+    if b.is_empty() || !b.min[1].is_finite() || !b.max[1].is_finite() {
+        return b;
+    }
+    if b.max[1] - b.min[1] >= TAU {
+        b.min[1] = -PI;
+        b.max[1] = PI;
+        return b;
+    }
+    let shift = ((b.min[1] + PI) / TAU).floor() * TAU;
+    b.min[1] -= shift;
+    b.max[1] -= shift;
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::f64::consts::{FRAC_PI_2, PI};
+    use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
     #[test]
     fn cartesian_box() {
@@ -432,6 +458,34 @@ mod tests {
             .with_coord_system(CoordSystem::Cylindrical);
         assert!(w.contains(Vec3::new(-1.5, 0.0, 0.5), CoordSystem::Cartesian));
         assert!(w.contains(Vec3::new(-1.5, -0.1, 0.5), CoordSystem::Cartesian));
+    }
+
+    #[test]
+    fn cylindrical_bbox_alpha_normalised() {
+        let b = Primitive::new(BoxShape::new([1.0, 6.5, 0.0], [2.0, 7.0, 1.0]))
+            .with_coord_system(CoordSystem::Cylindrical);
+        let n = b.bounding_box_in(CoordSystem::Cylindrical, CoordSystem::Cartesian);
+        assert!((n.min[1] - (6.5 - TAU)).abs() < 1e-12);
+        assert!((n.max[1] - (7.0 - TAU)).abs() < 1e-12);
+        let full = Primitive::new(BoxShape::new([1.0, 0.0, 0.0], [2.0, 10.0, 1.0]))
+            .with_coord_system(CoordSystem::Cylindrical);
+        let n = full.bounding_box_in(CoordSystem::Cylindrical, CoordSystem::Cartesian);
+        assert_eq!((n.min[1], n.max[1]), (-PI, PI));
+    }
+
+    #[test]
+    fn singular_and_unbounded_transforms() {
+        let mut t = Transform::new();
+        t.scale(0.0);
+        let b = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])).with_transform(t);
+        // Previously the identity was used as the inverse of a singular
+        // transform, so the untransformed box was reported.
+        assert!(!b.contains(Vec3::new(0.5, 0.5, 0.5), CoordSystem::Cartesian));
+        let mut t = Transform::new();
+        t.rotate_axis(2, 0.3);
+        let u = Primitive::new(UserDefined::new("1")).with_transform(t);
+        let bb = u.bounding_box(CoordSystem::Cartesian);
+        assert!(bb.min[0] == f64::NEG_INFINITY && bb.max[2] == f64::INFINITY);
     }
 
     #[test]

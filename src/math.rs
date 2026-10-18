@@ -262,6 +262,13 @@ impl Mat4 {
         Mat4(r)
     }
 
+    /// Transposed matrix.
+    pub fn transpose(&self) -> Mat4 {
+        Mat4(core::array::from_fn(|i| {
+            core::array::from_fn(|j| self.0[j][i])
+        }))
+    }
+
     /// Transforms a point (w = 1).
     #[inline]
     pub fn transform_point(&self, p: Vec3) -> Vec3 {

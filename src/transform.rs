@@ -26,7 +26,13 @@ pub enum TransformOp {
     Scale(Scalar),
     /// Non-uniform scaling.
     Scale3([Scalar; 3]),
-    /// Arbitrary 4×4 matrix (row major).
+    /// Arbitrary 4×4 matrix: 16 values in row-major order, following the
+    /// CSXCAD convention of a matrix acting on *row* vectors
+    /// `[x y z 1] · M` (the translation is in the last row).
+    ///
+    /// For robustness a matrix written in the column-vector convention
+    /// (translation in the last column, last row `0 0 0 1`) is recognised
+    /// and accepted as well; see [`TransformOp::to_mat4`].
     Matrix(Box<[Scalar; 16]>),
 }
 
@@ -121,19 +127,56 @@ impl TransformOp {
                 Mat4::scaling(Vec3::new(s, s, s))
             }
             TransformOp::Scale3(v) => Mat4::scaling(v3(v)),
-            TransformOp::Matrix(m) => Mat4::from_row_major(&core::array::from_fn(|i| m[i].value())),
+            TransformOp::Matrix(m) => matrix_from_values(&core::array::from_fn(|i| m[i].value())),
         }
+    }
+
+    /// The operation as a matrix acting on column vectors (`p' = M·p`),
+    /// with rotation angles in radians (`degrees = false`) or degrees.
+    pub fn to_mat4(&self, degrees: bool) -> Mat4 {
+        self.matrix(degrees)
+    }
+}
+
+/// Interprets 16 row-major values of a `Matrix` operation.
+///
+/// CSXCAD documents its matrices as acting on row vectors (translation in
+/// the last row), so the values are transposed into this crate's
+/// column-vector convention. If instead the last row is `0 0 0 1` and the
+/// last column carries a translation, the values are already in
+/// column-vector form and used as-is.
+fn matrix_from_values(v: &[f64; 16]) -> Mat4 {
+    let m = Mat4::from_row_major(v);
+    let last_row_affine = v[12] == 0.0 && v[13] == 0.0 && v[14] == 0.0 && v[15] == 1.0;
+    let column_translation = v[3] != 0.0 || v[7] != 0.0 || v[11] != 0.0;
+    if last_row_affine && column_translation {
+        m
+    } else {
+        m.transpose()
     }
 }
 
 /// An ordered list of transformations with cached forward and inverse
 /// matrices.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Transform {
     ops: Vec<TransformOp>,
     degrees: bool,
     matrix: Mat4,
     inverse: Mat4,
+    invertible: bool,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Transform {
+            ops: Vec::new(),
+            degrees: false,
+            matrix: Mat4::IDENTITY,
+            inverse: Mat4::IDENTITY,
+            invertible: true,
+        }
+    }
 }
 
 impl Transform {
@@ -199,9 +242,11 @@ impl Transform {
     }
 
     /// Appends an arbitrary matrix.
+    /// `m` acts on column vectors (`p' = m·p`); it is stored transposed in
+    /// the CSXCAD row-vector convention.
     pub fn matrix_op(&mut self, m: &Mat4) -> &mut Self {
         self.push(TransformOp::Matrix(Box::new(
-            m.to_row_major().map(Scalar::new),
+            m.transpose().to_row_major().map(Scalar::new),
         )))
     }
 
@@ -215,7 +260,7 @@ impl Transform {
     pub fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.ops.iter_mut().try_for_each(|o| o.update(p))?;
         self.rebuild();
-        if self.matrix.inverse().is_none() {
+        if !self.invertible {
             return Err(Error::Invalid("singular transformation".into()));
         }
         Ok(())
@@ -226,7 +271,23 @@ impl Transform {
             .ops
             .iter()
             .fold(Mat4::IDENTITY, |acc, op| op.matrix(self.degrees).mul(&acc));
-        self.inverse = self.matrix.inverse().unwrap_or(Mat4::IDENTITY);
+        match self.matrix.inverse() {
+            Some(inv) => {
+                self.inverse = inv;
+                self.invertible = true;
+            }
+            None => {
+                self.inverse = Mat4::IDENTITY;
+                self.invertible = false;
+            }
+        }
+    }
+
+    /// False if the combined matrix is singular (e.g. a zero scale); such a
+    /// transform maps every shape to something without interior, and
+    /// inside tests of primitives using it return `false`.
+    pub fn is_invertible(&self) -> bool {
+        self.invertible
     }
 
     /// Forward matrix (local → world).
@@ -234,7 +295,8 @@ impl Transform {
         &self.matrix
     }
 
-    /// Inverse matrix (world → local).
+    /// Inverse matrix (world → local); the identity when the transform is
+    /// not invertible (see [`Transform::is_invertible`]).
     pub fn inverse(&self) -> &Mat4 {
         &self.inverse
     }
@@ -255,6 +317,34 @@ impl Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matrix_conventions() {
+        // Row-vector convention (CSXCAD): translation in the last row.
+        let row = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 6.0, 7.0, 1.0,
+        ];
+        let op = TransformOp::from_name_args("Matrix", row.map(Scalar::new).to_vec()).unwrap();
+        let p = op.to_mat4(false).transform_point(Vec3::ZERO);
+        assert_eq!(p, Vec3::new(5.0, 6.0, 7.0));
+        // Column-vector form is recognised as well.
+        let col = [
+            1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 6.0, 0.0, 0.0, 1.0, 7.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let op = TransformOp::from_name_args("Matrix", col.map(Scalar::new).to_vec()).unwrap();
+        assert_eq!(
+            op.to_mat4(false).transform_point(Vec3::ZERO),
+            Vec3::new(5.0, 6.0, 7.0)
+        );
+        // A pure rotation follows the row-vector convention.
+        let r = Mat4::rotation(Vec3::unit(2), core::f64::consts::FRAC_PI_2);
+        let mut t = Transform::new();
+        t.matrix_op(&r);
+        assert!((t.apply(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
+        let mut t2 = Transform::new();
+        t2.matrix_op(&Mat4::translation(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(t2.apply(Vec3::ZERO), Vec3::new(1.0, 2.0, 3.0));
+    }
     use core::f64::consts::FRAC_PI_2;
 
     #[test]
@@ -278,6 +368,10 @@ mod tests {
         t.update(&ps).unwrap();
         assert!((t.apply(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
         assert!(TransformOp::from_name_args("Translate", vec![1.0.into()]).is_err());
+        let mut z = Transform::new();
+        z.scale(0.0);
+        assert!(!z.is_invertible());
+        assert!(Transform::new().is_invertible());
         let op = TransformOp::from_name_args(
             "Rotate_Origin",
             vec![0.0.into(), 0.0.into(), 1.0.into(), 2.0.into()],
