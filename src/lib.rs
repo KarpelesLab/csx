@@ -44,6 +44,7 @@
 pub mod coords;
 pub mod error;
 pub mod expr;
+pub mod fdtd;
 pub mod grid;
 pub mod io;
 pub mod math;

@@ -35,6 +35,7 @@
 //! is the element name, and written back as `<Unknown Property="..">`.
 
 pub mod dom;
+mod fdtd;
 mod read;
 mod write;
 
@@ -43,10 +44,12 @@ use std::path::Path;
 pub use dom::{Element, Node};
 
 use crate::error::{Error, Result};
+use crate::fdtd::FdtdSettings;
 use crate::structure::ContinuousStructure;
 
 /// A complete openEMS simulation description: the FDTD settings (kept as raw
-/// XML) and the structure.
+/// XML, with typed access through [`OpenEmsDocument::fdtd_settings`]) and
+/// the structure.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct OpenEmsDocument {
     /// The `<FDTD>` element, if present.
@@ -84,6 +87,22 @@ impl OpenEmsDocument {
             }
             other => Err(Error::Format(format!("unexpected root element <{other}>"))),
         }
+    }
+
+    /// Typed view of the `<FDTD>` element; `None` when the document has no
+    /// FDTD settings.
+    pub fn fdtd_settings(&self) -> Option<Result<FdtdSettings>> {
+        self.fdtd.as_ref().map(FdtdSettings::from_xml_element)
+    }
+
+    /// Replaces the `<FDTD>` element by `settings`. Child elements other
+    /// than `<Excitation>` and `<BoundaryCond>` of an existing element are
+    /// kept.
+    pub fn set_fdtd_settings(&mut self, settings: &FdtdSettings) {
+        self.fdtd = Some(match &self.fdtd {
+            Some(old) => settings.merge_into_element(old),
+            None => settings.to_xml_element(),
+        });
     }
 
     /// Serialises to an `<openEMS>` document.

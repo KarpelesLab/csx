@@ -325,6 +325,18 @@ fn external_samples() {
         let again = OpenEmsDocument::from_xml_str(&first)
             .unwrap_or_else(|e| panic!("{} (rewritten): {e}", path.display()));
         assert_eq!(first, again.to_xml_string(), "{}", path.display());
+        if let Some(settings) = doc.fdtd_settings() {
+            let settings = settings.unwrap_or_else(|e| panic!("{} FDTD: {e}", path.display()));
+            let mut typed = doc.clone();
+            typed.set_fdtd_settings(&settings);
+            let reread = OpenEmsDocument::from_xml_str(&typed.to_xml_string()).unwrap();
+            assert_eq!(
+                reread.fdtd_settings().unwrap().unwrap(),
+                settings,
+                "{}",
+                path.display()
+            );
+        }
         n += 1;
     }
     assert!(n > 0);
