@@ -23,7 +23,7 @@ mod user;
 
 pub use basic::{BoxShape, Cylinder, CylindricalShell, MultiBox, Sphere, SphericalShell};
 pub use curve::{Curve, PointShape, Wire};
-pub use poly::{LinPoly, Polygon, RotPoly, plane_axes};
+pub use poly::{LinPoly, PolyVertices, Polygon, RotPoly, plane_axes};
 pub use polyhedron::Polyhedron;
 pub use user::{USER_VARS, UserDefined};
 

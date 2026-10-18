@@ -1,6 +1,7 @@
 use super::*;
 use crate::coords::CoordSystem;
 use crate::math::Vec3;
+use crate::param::Scalar;
 use crate::primitives::Shape;
 use crate::properties::{MaterialQuantity, PropertyKind};
 use crate::{PropertyType, TypeMask};
@@ -317,7 +318,8 @@ fn vertex_expressions() {
     let Shape::Polygon(poly) = &p[0].shape else {
         panic!()
     };
-    assert_eq!(poly.vertices, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 4.0)]);
+    assert_eq!(poly.vertices.values(), [(0.0, 0.0), (2.0, 0.0), (2.0, 4.0)]);
+    assert_eq!(poly.vertices.points()[2][1].expression(), Some("w"));
     let Shape::Polyhedron(ph) = &p[1].shape else {
         panic!()
     };
@@ -375,4 +377,41 @@ fn external_samples() {
         n += 1;
     }
     assert!(n > 0);
+}
+
+#[test]
+fn parametric_polygon_round_trip() {
+    use crate::primitives::{LinPoly, PolyVertices};
+    let mut s = ContinuousStructure::new();
+    s.parameters.set("w", 3.0);
+    let id = s.add_property(crate::Property::metal("m"));
+    let verts: PolyVertices = [
+        [Scalar::new(0.0), Scalar::new(0.0)],
+        [Scalar::expr("w"), Scalar::new(0.0)],
+        [Scalar::expr("w"), Scalar::expr("w*2")],
+    ]
+    .into_iter()
+    .collect();
+    s.add_primitive(id, LinPoly::new(2, 0.0, 1.0, verts))
+        .unwrap();
+    s.update().unwrap();
+    let xml = s.to_xml_string();
+    assert!(xml.contains(r#"X2="w*2""#), "{xml}");
+    let r = ContinuousStructure::from_xml_str(&xml).unwrap();
+    let Shape::LinPoly(lp) = &r.property_by_name("m").unwrap().primitives[0].shape else {
+        panic!()
+    };
+    assert_eq!(lp.vertices.values()[2], (3.0, 6.0));
+    assert_eq!(lp.vertices.points()[2][1].expression(), Some("w*2"));
+    assert_eq!(r.to_xml_string(), xml);
+    // changing the parameter changes the geometry after update()
+    let mut r = r;
+    r.parameters.set("w", 10.0);
+    r.update().unwrap();
+    let hit = r.property_at(
+        Vec3::new(8.0, 1.0, 0.5),
+        crate::CoordSystem::Cartesian,
+        crate::TypeMask::ANY,
+    );
+    assert!(hit.is_some());
 }

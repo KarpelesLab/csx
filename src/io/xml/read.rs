@@ -10,8 +10,8 @@ use crate::math::Vec3;
 use crate::param::{Parameter, ParameterKind, ParameterSet, Scalar, ScalarPoint};
 use crate::primitives::{
     BoxShape, Curve, Cylinder, CylindricalShell, LinPoly, MeshFileType, MultiBox, PointShape,
-    Polygon, Polyhedron, PolyhedronReader, Primitive, RotPoly, Shape, Sphere, SphericalShell,
-    UserDefined, Wire,
+    PolyVertices, Polygon, Polyhedron, PolyhedronReader, Primitive, RotPoly, Shape, Sphere,
+    SphericalShell, UserDefined, Wire,
 };
 use crate::properties::{
     AbsorbingBC, Aniso, ConductingSheet, DebyeMaterial, DebyePole, DiscMaterial, DumpBox,
@@ -554,8 +554,7 @@ fn probe(el: &Element, a: &Attrs<'_>) -> Result<ProbeBox> {
     Ok(p)
 }
 
-/// A coordinate that must be numeric in the model (polygon and polyhedron
-/// vertices): plain numbers, or expressions evaluated once against the
+/// A coordinate that must be numeric in the model (polyhedron vertices): plain numbers, or expressions evaluated once against the
 /// file's parameters.
 fn coordinate(s: &str, ps: &ParameterSet, what: &str) -> Result<f64> {
     match parse_number_lenient(s) {
@@ -566,11 +565,13 @@ fn coordinate(s: &str, ps: &ParameterSet, what: &str) -> Result<f64> {
     }
 }
 
-fn vertices_2d(el: &Element, ps: &ParameterSet) -> Result<Vec<(f64, f64)>> {
+/// Polygon vertices; expressions are kept and evaluated by the structure
+/// update that follows reading.
+fn vertices_2d(el: &Element) -> PolyVertices {
     el.children_named("Vertex")
         .map(|v| {
-            let c = |n: &str| v.attr(n).map_or(Ok(0.0), |s| coordinate(s, ps, n));
-            Ok((c("X1")?, c("X2")?))
+            let c = |n: &str| v.attr(n).map_or(Scalar::new(0.0), scalar);
+            [c("X1"), c("X2")]
         })
         .collect()
 }
@@ -672,7 +673,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
             Shape::Polygon(Polygon {
                 norm_dir: axis(&a, &["NormDir"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
-                vertices: vertices_2d(el, ps)?,
+                vertices: vertices_2d(el),
             })
         }
         "LinPoly" => {
@@ -681,7 +682,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
                 norm_dir: axis(&a, &["NormDir"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
                 length: a.scalar("Length").unwrap_or_default(),
-                vertices: vertices_2d(el, ps)?,
+                vertices: vertices_2d(el),
             })
         }
         "RotPoly" => {
@@ -690,7 +691,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
                 norm_dir: axis(&a, &["NormDir"], 0)?,
                 rot_axis_dir: axis(&a, &["RotAxisDir", "RotAxis", "RotationAxis"], 2)?,
                 elevation: a.scalar("Elevation").unwrap_or_default(),
-                vertices: vertices_2d(el, ps)?,
+                vertices: vertices_2d(el),
                 ..Default::default()
             };
             if let Some(ang) = el.child("Angles") {

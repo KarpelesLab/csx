@@ -2,7 +2,7 @@
 
 use super::dom::Element;
 use crate::param::{ParameterKind, ParameterSet, Scalar, ScalarPoint, format_f64};
-use crate::primitives::{MeshFileType, Primitive, Shape};
+use crate::primitives::{MeshFileType, PolyVertices, Primitive, Shape};
 use crate::properties::{
     Aniso, Material, MaterialQuantity, ProbeBox, Property, PropertyKind, Rgba, WeightFn,
 };
@@ -279,13 +279,13 @@ fn probe(el: &mut Element, children: &mut Vec<Element>, p: &ProbeBox) {
     }
 }
 
-fn vertices_2d(el: &mut Element, v: &[(f64, f64)]) {
+fn vertices_2d(el: &mut Element, v: &PolyVertices) {
     el.set_attr("QtyVertices", v.len().to_string());
-    for &(a, c) in v {
+    for [a, c] in v.points() {
         el.push(
             Element::new("Vertex")
-                .with_attr("X1", format_f64(a))
-                .with_attr("X2", format_f64(c)),
+                .with_attr("X1", a.to_text())
+                .with_attr("X2", c.to_text()),
         );
     }
 }

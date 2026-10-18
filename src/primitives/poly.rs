@@ -15,6 +15,117 @@ use crate::param::{ParameterSet, Scalar};
 
 use super::geom::{angle_ok, in_range, point_in_polygon, sector_bbox};
 
+/// Polygon vertices: parametric `[u, v]` coordinates plus a cache of their
+/// evaluated values.
+///
+/// The cache is what geometric queries use; it is rebuilt whenever the
+/// vertices are modified through this type's methods and by
+/// [`PolyVertices::update`] (called by the owning structure's `update()`).
+/// `PolyVertices` dereferences to the evaluated `(u, v)` slice. Vertices given
+/// as expressions evaluate to `NaN` until updated, unless they are
+/// parameter-free.
+#[derive(Debug, Clone, Default)]
+pub struct PolyVertices {
+    points: Vec<[Scalar; 2]>,
+    values: Vec<(f64, f64)>,
+}
+
+impl PartialEq for PolyVertices {
+    fn eq(&self, o: &Self) -> bool {
+        self.points == o.points
+    }
+}
+
+impl PolyVertices {
+    /// No vertices.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Vertices from parametric coordinates.
+    pub fn from_scalars(points: Vec<[Scalar; 2]>) -> Self {
+        let values = points.iter().map(|[a, b]| (a.value(), b.value())).collect();
+        PolyVertices { points, values }
+    }
+
+    /// The parametric coordinates.
+    pub fn points(&self) -> &[[Scalar; 2]] {
+        &self.points
+    }
+
+    /// The evaluated coordinates (same as dereferencing).
+    pub fn values(&self) -> &[(f64, f64)] {
+        &self.values
+    }
+
+    /// Appends a vertex.
+    pub fn push(&mut self, u: impl Into<Scalar>, v: impl Into<Scalar>) {
+        let p = [u.into(), v.into()];
+        self.values.push((p[0].value(), p[1].value()));
+        self.points.push(p);
+    }
+
+    /// Replaces vertex `i`. Panics if `i` is out of bounds.
+    pub fn set(&mut self, i: usize, u: impl Into<Scalar>, v: impl Into<Scalar>) {
+        let p = [u.into(), v.into()];
+        self.values[i] = (p[0].value(), p[1].value());
+        self.points[i] = p;
+    }
+
+    /// Removes all vertices.
+    pub fn clear(&mut self) {
+        self.points.clear();
+        self.values.clear();
+    }
+
+    /// Re-evaluates the parametric coordinates against `params`.
+    pub fn update(&mut self, params: &ParameterSet) -> Result<()> {
+        for (p, v) in self.points.iter_mut().zip(&mut self.values) {
+            p[0].update(params)?;
+            p[1].update(params)?;
+            *v = (p[0].value(), p[1].value());
+        }
+        Ok(())
+    }
+}
+
+impl core::ops::Deref for PolyVertices {
+    type Target = [(f64, f64)];
+    fn deref(&self) -> &[(f64, f64)] {
+        &self.values
+    }
+}
+
+impl<'a> IntoIterator for &'a PolyVertices {
+    type Item = &'a (f64, f64);
+    type IntoIter = core::slice::Iter<'a, (f64, f64)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl From<Vec<(f64, f64)>> for PolyVertices {
+    fn from(v: Vec<(f64, f64)>) -> Self {
+        let points = v
+            .iter()
+            .map(|&(a, b)| [Scalar::new(a), Scalar::new(b)])
+            .collect();
+        PolyVertices { points, values: v }
+    }
+}
+
+impl FromIterator<[Scalar; 2]> for PolyVertices {
+    fn from_iter<I: IntoIterator<Item = [Scalar; 2]>>(it: I) -> Self {
+        PolyVertices::from_scalars(it.into_iter().collect())
+    }
+}
+
+impl FromIterator<(f64, f64)> for PolyVertices {
+    fn from_iter<I: IntoIterator<Item = (f64, f64)>>(it: I) -> Self {
+        PolyVertices::from(it.into_iter().collect::<Vec<_>>())
+    }
+}
+
 /// The two in-plane axes for a plane normal to `n`.
 #[inline]
 pub fn plane_axes(n: usize) -> (usize, usize) {
@@ -55,16 +166,20 @@ pub struct Polygon {
     /// Position of the plane along `norm_dir`.
     pub elevation: Scalar,
     /// Vertices `(u, v)`; see the module docs for the axis mapping.
-    pub vertices: Vec<(f64, f64)>,
+    pub vertices: PolyVertices,
 }
 
 impl Polygon {
     /// Polygon in the plane `axis[norm_dir] = elevation`.
-    pub fn new(norm_dir: usize, elevation: impl Into<Scalar>, vertices: Vec<(f64, f64)>) -> Self {
+    pub fn new(
+        norm_dir: usize,
+        elevation: impl Into<Scalar>,
+        vertices: impl Into<PolyVertices>,
+    ) -> Self {
         Polygon {
             norm_dir,
             elevation: elevation.into(),
-            vertices,
+            vertices: vertices.into(),
         }
     }
 
@@ -97,6 +212,7 @@ impl Polygon {
 
     pub(crate) fn update(&mut self, p: &ParameterSet) -> Result<()> {
         check_dir(self.norm_dir, "normal direction")?;
+        self.vertices.update(p)?;
         self.elevation.update(p)
     }
 }
@@ -112,7 +228,7 @@ pub struct LinPoly {
     /// Extrusion length (may be negative).
     pub length: Scalar,
     /// Vertices `(u, v)`.
-    pub vertices: Vec<(f64, f64)>,
+    pub vertices: PolyVertices,
 }
 
 impl LinPoly {
@@ -121,13 +237,13 @@ impl LinPoly {
         norm_dir: usize,
         elevation: impl Into<Scalar>,
         length: impl Into<Scalar>,
-        vertices: Vec<(f64, f64)>,
+        vertices: impl Into<PolyVertices>,
     ) -> Self {
         LinPoly {
             norm_dir,
             elevation: elevation.into(),
             length: length.into(),
-            vertices,
+            vertices: vertices.into(),
         }
     }
 
@@ -157,6 +273,7 @@ impl LinPoly {
 
     pub(crate) fn update(&mut self, p: &ParameterSet) -> Result<()> {
         check_dir(self.norm_dir, "normal direction")?;
+        self.vertices.update(p)?;
         self.elevation.update(p)?;
         self.length.update(p)
     }
@@ -183,7 +300,7 @@ pub struct RotPoly {
     /// Stop angle (radians).
     pub stop_angle: Scalar,
     /// Vertices `(u, v)`.
-    pub vertices: Vec<(f64, f64)>,
+    pub vertices: PolyVertices,
 }
 
 impl Default for RotPoly {
@@ -194,18 +311,18 @@ impl Default for RotPoly {
             elevation: Scalar::new(0.0),
             start_angle: Scalar::new(0.0),
             stop_angle: Scalar::new(TAU),
-            vertices: Vec::new(),
+            vertices: PolyVertices::new(),
         }
     }
 }
 
 impl RotPoly {
     /// Full (2π) revolution of a polygon.
-    pub fn new(norm_dir: usize, rot_axis_dir: usize, vertices: Vec<(f64, f64)>) -> Self {
+    pub fn new(norm_dir: usize, rot_axis_dir: usize, vertices: impl Into<PolyVertices>) -> Self {
         RotPoly {
             norm_dir,
             rot_axis_dir,
-            vertices,
+            vertices: vertices.into(),
             ..Default::default()
         }
     }
@@ -298,6 +415,7 @@ impl RotPoly {
                 "rotation axis must lie in the polygon plane".into(),
             ));
         }
+        self.vertices.update(p)?;
         self.elevation.update(p)?;
         self.start_angle.update(p)?;
         self.stop_angle.update(p)
@@ -355,5 +473,34 @@ mod tests {
         half.stop_angle = Scalar::new(PI / 2.0);
         assert!(half.inside(Vec3::new(1.0, 1.0, 0.5)));
         assert!(!half.inside(Vec3::new(-1.0, 1.0, 0.5)));
+    }
+
+    #[test]
+    fn parametric_vertices() {
+        let mut v = PolyVertices::new();
+        v.push(0.0, 0.0);
+        v.push("w", 0.0);
+        v.push("w", "w/2");
+        v.push(0.0, "2*3");
+        // parameter-free expressions evaluate immediately
+        assert_eq!(v[3], (0.0, 6.0));
+        assert!(v[1].0.is_nan());
+        let mut p = Polygon::new(2, 0.0, v);
+        let mut ps = ParameterSet::new();
+        ps.set("w", 2.0);
+        p.update(&ps).unwrap();
+        assert_eq!(p.vertices.values()[2], (2.0, 1.0));
+        assert!(p.inside(Vec3::new(1.5, 0.5, 0.0)));
+        assert!(!p.inside(Vec3::new(3.0, 0.5, 0.0)));
+        ps.set("w", 4.0);
+        p.update(&ps).unwrap();
+        assert!(p.inside(Vec3::new(3.0, 0.5, 0.0)));
+        assert_eq!(p.vertices.points()[1][0].expression(), Some("w"));
+        // equality ignores the cache, compares definitions
+        let q = Polygon::new(2, 0.0, p.vertices.clone());
+        assert_eq!(p, q);
+        p.vertices.set(0, -1.0, -1.0);
+        assert_eq!(p.vertices[0], (-1.0, -1.0));
+        assert!(p.update(&ParameterSet::new()).is_err());
     }
 }
