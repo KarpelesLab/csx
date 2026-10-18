@@ -39,7 +39,14 @@ impl Default for TessellationOptions {
 impl TessellationOptions {
     fn arc_segments(&self, span: f64) -> usize {
         let full = self.segments.max(3) as f64;
-        ((full * span.abs() / TAU).ceil() as usize).max(1)
+        // Arcs beyond a full turn overlap themselves; cap them (also keeps
+        // huge or NaN spans from producing absurd segment counts).
+        let span = if span.is_nan() {
+            0.0
+        } else {
+            span.abs().min(TAU)
+        };
+        ((full * span / TAU).ceil() as usize).max(1)
     }
 }
 
@@ -951,5 +958,12 @@ mod tests {
         assert_eq!(t.len(), 2);
         assert_eq!(t[0].mesh.triangles.len(), 12);
         assert_eq!(t[1].polyline.len(), 2);
+    }
+
+    #[test]
+    fn huge_angles_are_capped() {
+        let o = TessellationOptions::default();
+        assert_eq!(o.arc_segments(1e300), o.arc_segments(TAU));
+        assert_eq!(o.arc_segments(f64::NAN), 1);
     }
 }

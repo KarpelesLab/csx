@@ -202,7 +202,7 @@ impl RectilinearGrid {
 /// cell spans one unit of `∫ dx / h(x)`. Neighbour sizes are refined
 /// iteratively until stable.
 pub fn smooth_lines(fixed: &[f64], max_res: f64, ratio: f64) -> Result<Vec<f64>> {
-    if max_res.is_nan() || ratio.is_nan() || max_res <= 0.0 || ratio < 1.0 {
+    if max_res.is_nan() || !ratio.is_finite() || max_res <= 0.0 || ratio < 1.0 {
         return Err(Error::Invalid(format!(
             "smooth_lines: max_res {max_res}, ratio {ratio}"
         )));
@@ -222,7 +222,7 @@ pub fn smooth_lines(fixed: &[f64], max_res: f64, ratio: f64) -> Result<Vec<f64>>
         for g in 0..n {
             let hl = if g > 0 { edge[g - 1].1 } else { max_res };
             let hr = if g + 1 < n { edge[g + 1].0 } else { max_res };
-            let pts = fill_gap(f[g], f[g + 1], hl, hr, max_res, ratio);
+            let pts = fill_gap(f[g], f[g + 1], hl, hr, max_res, ratio)?;
             let first = pts.first().copied().unwrap_or(f[g + 1]) - f[g];
             let last = f[g + 1] - pts.last().copied().unwrap_or(f[g]);
             let new = (first, last);
@@ -238,7 +238,13 @@ pub fn smooth_lines(fixed: &[f64], max_res: f64, ratio: f64) -> Result<Vec<f64>>
             break;
         }
     }
-    let mut out = Vec::with_capacity(f.len() + gaps.iter().map(Vec::len).sum::<usize>());
+    let count = f.len() + gaps.iter().map(Vec::len).sum::<usize>();
+    if count > MAX_SMOOTH_LINES {
+        return Err(Error::Invalid(format!(
+            "smooth_lines: more than {MAX_SMOOTH_LINES} lines required"
+        )));
+    }
+    let mut out = Vec::with_capacity(count);
     for g in 0..n {
         out.push(f[g]);
         out.extend_from_slice(&gaps[g]);
@@ -247,43 +253,83 @@ pub fn smooth_lines(fixed: &[f64], max_res: f64, ratio: f64) -> Result<Vec<f64>>
     Ok(out)
 }
 
+/// Maximum number of lines [`smooth_lines`] may produce.
+pub const MAX_SMOOTH_LINES: usize = 10_000_000;
+
 /// Interior points for the gap `[a, b]` given neighbour cell sizes.
-fn fill_gap(a: f64, b: f64, hl: f64, hr: f64, hmax: f64, r: f64) -> Vec<f64> {
+///
+/// The target size function is `h(x) = min(hmax, A + k(x−a), B + k(b−x))`,
+/// piecewise linear; `∫dx/h` is integrated and inverted exactly on each
+/// linear piece so that cells follow the grading even when `h` varies by
+/// orders of magnitude across the gap.
+fn fill_gap(a: f64, b: f64, hl: f64, hr: f64, hmax: f64, r: f64) -> Result<Vec<f64>> {
     let len = b - a;
     if len <= hmax && len <= hl * r && len <= hr * r {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     // With h(x) = h0 + k·x and one cell per unit of ∫dx/h, consecutive cells
     // grow by exactly e^k; choose k = ln r and h0 so the first cell is h·r.
     let k = r.ln();
     let c = if k > 1e-12 { k / (r - 1.0) } else { 1.0 };
-    let h = |x: f64| {
-        hmax.min(c * hl * r + k * (x - a))
-            .min(c * hr * r + k * (b - x))
-    };
-    // Integrate 1/h numerically (h is piecewise linear; Simpson per slice).
-    const S: usize = 512;
-    let dx = len / S as f64;
-    let mut cum = Vec::with_capacity(S + 1);
-    cum.push(0.0);
-    let mut acc = 0.0;
-    for i in 0..S {
-        let x0 = a + dx * i as f64;
-        acc += dx / 6.0 * (1.0 / h(x0) + 4.0 / h(x0 + dx / 2.0) + 1.0 / h(x0 + dx));
-        cum.push(acc);
-    }
-    let cells = acc.ceil().max(1.0) as usize;
-    let mut pts = Vec::with_capacity(cells.saturating_sub(1));
-    let mut j = 0;
-    for c in 1..cells {
-        let target = acc * c as f64 / cells as f64;
-        while j < S && cum[j + 1] < target {
-            j += 1;
+    let (ha, hb) = (c * hl * r, c * hr * r);
+    let h = |x: f64| hmax.min(ha + k * (x - a)).min(hb + k * (b - x));
+    // Breakpoints of the piecewise linear h.
+    let mut xs = vec![a, b];
+    if k > 0.0 {
+        for x in [
+            a + (hmax - ha) / k,
+            b - (hmax - hb) / k,
+            0.5 * (a + b + (hb - ha) / k),
+        ] {
+            if x > a && x < b {
+                xs.push(x);
+            }
         }
-        let t = (target - cum[j]) / (cum[j + 1] - cum[j]);
-        pts.push(a + dx * (j as f64 + t));
     }
-    pts
+    xs.sort_by(f64::total_cmp);
+    // Pieces (x0, x1, h(x0), slope, ∫ over the piece).
+    let mut pieces = Vec::with_capacity(xs.len());
+    let mut total = 0.0;
+    for w in xs.windows(2) {
+        let (x0, x1) = (w[0], w[1]);
+        if x1 <= x0 {
+            continue;
+        }
+        let (h0, h1) = (h(x0), h(x1));
+        let slope = (h1 - h0) / (x1 - x0);
+        let integral = if slope.abs() <= 1e-12 * h0.max(h1) / (x1 - x0) {
+            (x1 - x0) / h0
+        } else {
+            (h1 / h0).ln() / slope
+        };
+        total += integral;
+        pieces.push((x0, x1, h0, slope, integral));
+    }
+    if !total.is_finite() || total > MAX_SMOOTH_LINES as f64 {
+        return Err(Error::Invalid(format!(
+            "smooth_lines: gap [{a}, {b}] would need more than {MAX_SMOOTH_LINES} lines"
+        )));
+    }
+    let cells = (total.ceil() as usize).max(1);
+    let mut pts = Vec::with_capacity(cells - 1);
+    let mut piece = 0;
+    let mut before = 0.0;
+    for n in 1..cells {
+        let target = total * n as f64 / cells as f64;
+        while piece + 1 < pieces.len() && before + pieces[piece].4 < target {
+            before += pieces[piece].4;
+            piece += 1;
+        }
+        let (x0, x1, h0, slope, _) = pieces[piece];
+        let f = target - before;
+        let x = if slope.abs() <= 1e-12 * h0 / (x1 - x0) {
+            x0 + f * h0
+        } else {
+            x0 + h0 * ((slope * f).exp() - 1.0) / slope
+        };
+        pts.push(x.clamp(x0, x1));
+    }
+    Ok(pts)
 }
 
 #[cfg(test)]
@@ -319,5 +365,47 @@ mod tests {
             assert!(q <= 1.5 * 1.1, "ratio {q} in {d:?}");
         }
         assert!(smooth_lines(&fixed, 0.0, 1.5).is_err());
+    }
+
+    fn check_graded(s: &[f64], max_res: f64, ratio: f64) {
+        let d: Vec<f64> = s.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            d.iter().all(|&x| x > 0.0 && x <= max_res * (1.0 + 1e-9)),
+            "{d:?}"
+        );
+        for w in d.windows(2) {
+            let q = w[1].max(w[0]) / w[1].min(w[0]);
+            assert!(q <= ratio * 1.05, "ratio {q} in {d:?}");
+        }
+    }
+
+    #[test]
+    fn small_gap_next_to_large_one() {
+        // Regression: the numeric integration was too coarse when the size
+        // function varied by orders of magnitude, giving ratios above 3.
+        let s = smooth_lines(&[0.0, 1e-3, 10.0], 1.0, 1.5).unwrap();
+        // the tiny fixed cell is kept; grading starts after it
+        assert!((s[1] - 1e-3).abs() < 1e-15);
+        check_graded(&s[1..], 1.0, 1.5);
+        let s = smooth_lines(&[-50.0, 0.0, 3.5e-5, 50.0], 2.0, 1.3).unwrap();
+        let i = s.iter().position(|&x| x == 3.5e-5).unwrap();
+        check_graded(&s[i..], 2.0, 1.3);
+        let z = s.iter().position(|&x| x == 0.0).unwrap();
+        check_graded(&s[..=z], 2.0, 1.3);
+    }
+
+    #[test]
+    fn smoothing_limits() {
+        // ratio 1 is uniform at the smallest neighbour size
+        let s = smooth_lines(&[0.0, 0.5, 3.0], 1.0, 1.0).unwrap();
+        check_graded(&s, 1.0, 1.0);
+        // absurd counts are rejected instead of exhausting memory
+        assert!(smooth_lines(&[0.0, 1e12], 1e-3, 1.5).is_err());
+        assert!(smooth_lines(&[0.0, 1e-9, 1e9], 1.0, 1.0).is_err());
+        assert!(smooth_lines(&[0.0, 1.0], 0.1, f64::INFINITY).is_err());
+        assert!(smooth_lines(&[0.0, 1.0], f64::NAN, 1.5).is_err());
+        // infinite max_res: only grading constraints apply
+        let s = smooth_lines(&[0.0, 1.0, 100.0], f64::INFINITY, 2.0).unwrap();
+        assert!(s.len() > 3);
     }
 }

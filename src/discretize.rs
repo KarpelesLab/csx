@@ -210,6 +210,12 @@ impl MaterialGrid {
     }
 }
 
+/// Largest per-axis sub-sampling factor accepted by [`discretize`].
+pub const MAX_SUBSAMPLING: usize = 64;
+
+/// Largest number of grid nodes [`discretize`] accepts.
+pub const MAX_NODES: usize = 1 << 32;
+
 /// Discretises the materials, metals, sheets, excitations and lumped
 /// elements of `s` onto `s.grid`. The structure should be up to date (see
 /// [`ContinuousStructure::update`]).
@@ -220,10 +226,10 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
             "discretize: the grid has an axis without lines".into(),
         ));
     }
-    if opts.subsampling == 0 {
-        return Err(Error::Invalid(
-            "discretize: subsampling must be at least 1".into(),
-        ));
+    if opts.subsampling == 0 || opts.subsampling > MAX_SUBSAMPLING {
+        return Err(Error::Invalid(format!(
+            "discretize: subsampling must be in 1..={MAX_SUBSAMPLING}"
+        )));
     }
     let cs = s.grid.coord_system;
     let ctx = Ctx {
@@ -246,7 +252,15 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
     } else {
         opts.threads
     };
-    let total: usize = dims.iter().product();
+    let total = dims
+        .iter()
+        .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+        .filter(|&t| t <= MAX_NODES)
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "discretize: grid {dims:?} exceeds {MAX_NODES} nodes"
+            ))
+        })?;
 
     let mut out = MaterialGrid {
         dims,
@@ -1258,8 +1272,19 @@ mod tests {
             ..Default::default()
         };
         assert!(discretize(&s, &opts).is_err());
+        let opts = DiscretizeOptions {
+            subsampling: 1000,
+            ..Default::default()
+        };
+        assert!(discretize(&s, &opts).is_err());
         let g = discretize(&s, &DiscretizeOptions::default()).unwrap();
         assert_eq!(g.dims, [3, 4, 5]);
+        // Grids too large to allocate are rejected instead of aborting.
+        let mut big = s.clone();
+        for d in 0..3 {
+            big.grid.set_lines(d, (0..2048).map(|i| i as f64)).unwrap();
+        }
+        assert!(discretize(&big, &DiscretizeOptions::default()).is_err());
         assert_eq!(g.node(g.index([2, 3, 4])), [2, 3, 4]);
         assert!(g.edge_exists(0, [1, 3, 4]));
         assert!(!g.edge_exists(0, [2, 0, 0]));
