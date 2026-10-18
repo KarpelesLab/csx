@@ -5,14 +5,39 @@ use std::collections::HashMap;
 use crate::error::{Error, Result};
 use crate::math::{BoundingBox, Vec3};
 
+use super::bvh::Bvh;
 use super::geom::REL_TOL;
+
+/// Fixed, "irrational" ray directions used for the parity test. Choosing
+/// directions that are not aligned with any axis or diagonal makes grazing
+/// hits on typical CAD meshes unlikely.
+const RAY_DIRS: [[f64; 3]; 3] = [
+    [
+        0.577_215_664_901_532_9,
+        0.618_033_988_749_894_8,
+        0.533_402_669_220_018_2,
+    ],
+    [
+        -0.734_513_220_164_721_4,
+        0.271_828_182_845_904_5,
+        0.621_498_663_213_558_7,
+    ],
+    [
+        0.198_062_264_195_162_1,
+        -0.881_373_587_019_543,
+        0.429_449_408_670_437_8,
+    ],
+];
 
 /// A polyhedron defined by vertices and polygonal faces (vertex index
 /// lists). Faces with more than three vertices are fan-triangulated.
 ///
-/// A *closed* polyhedron (every edge shared by exactly two faces) is a solid
-/// and its interior is determined with a generalised winding number; an
-/// open polyhedron is a surface and only points on it are "inside".
+/// A *closed* polyhedron (every edge shared by exactly two faces) is a solid;
+/// a point is inside when a ray from it crosses the surface an odd number
+/// of times (several rays vote; degenerate cases fall back to the
+/// generalised winding number). An open polyhedron is a surface and only
+/// points on it are "inside". A bounding volume hierarchy over the
+/// triangles keeps queries roughly logarithmic in the face count.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polyhedron {
     vertices: Vec<Vec3>,
@@ -20,6 +45,7 @@ pub struct Polyhedron {
     tris: Vec<[u32; 3]>,
     bbox: BoundingBox,
     closed: bool,
+    bvh: Bvh,
 }
 
 impl Polyhedron {
@@ -47,12 +73,18 @@ impl Polyhedron {
         }
         let bbox = BoundingBox::from_points(vertices.iter().copied());
         let closed = is_closed(&faces);
+        let boxes: Vec<BoundingBox> = tris
+            .iter()
+            .map(|t| BoundingBox::from_points(t.map(|i| vertices[i as usize])))
+            .collect();
+        let bvh = Bvh::build(&boxes);
         Ok(Polyhedron {
             vertices,
             faces,
             tris,
             bbox,
             closed,
+            bvh,
         })
     }
 
@@ -121,19 +153,70 @@ impl Polyhedron {
         total / (4.0 * core::f64::consts::PI)
     }
 
-    /// True if `p` lies on the surface (within tolerance).
-    pub fn on_surface(&self, p: Vec3) -> bool {
+    /// Absolute tolerance used for the on-surface test.
+    fn surface_eps(&self) -> f64 {
         let scale = self
             .bbox
             .size()
             .norm()
             .max(self.bbox.max.norm())
             .max(self.bbox.min.norm());
-        let eps = REL_TOL * scale.max(1e-300);
-        self.tris.iter().any(|t| {
-            let [a, b, c] = self.tri(t);
-            (closest_on_triangle(p, a, b, c) - p).norm() <= eps
-        })
+        REL_TOL * scale.max(1e-300)
+    }
+
+    /// True if `p` lies on the surface (within tolerance).
+    pub fn on_surface(&self, p: Vec3) -> bool {
+        let eps = self.surface_eps();
+        let mut found = false;
+        self.bvh.visit(
+            |b| b.expanded(eps).contains(p),
+            |i| {
+                let [a, b, c] = self.tri(&self.tris[i as usize]);
+                found = (closest_on_triangle(p, a, b, c) - p).norm() <= eps;
+                !found
+            },
+        );
+        found
+    }
+
+    /// Counts the crossings of the ray `p + t·d` (`t > 0`) with the surface.
+    /// Returns `None` when a hit is too close to an edge or vertex for the
+    /// parity to be trusted.
+    fn ray_crossings(&self, p: Vec3, d: Vec3) -> Option<usize> {
+        let inv = Vec3::new(1.0 / d[0], 1.0 / d[1], 1.0 / d[2]);
+        let mut count = 0usize;
+        let mut reliable = true;
+        self.bvh.visit(
+            |b| ray_hits_box(p, inv, b),
+            |i| {
+                let [a, b, c] = self.tri(&self.tris[i as usize]);
+                match ray_triangle(p, d, a, b, c) {
+                    RayHit::Miss => {}
+                    RayHit::Hit => count += 1,
+                    RayHit::Degenerate => reliable = false,
+                }
+                reliable
+            },
+        );
+        reliable.then_some(count)
+    }
+
+    /// Parity based inside test for closed meshes (majority vote of up to
+    /// three rays, winding number fallback).
+    fn inside_closed(&self, p: Vec3) -> bool {
+        let mut votes = [0usize; 2];
+        for d in RAY_DIRS {
+            if let Some(n) = self.ray_crossings(p, Vec3(d)) {
+                votes[n % 2] += 1;
+                if votes[0] == 2 || votes[1] == 2 {
+                    break;
+                }
+            }
+        }
+        match votes {
+            [0, 0] => self.winding_number(p).abs() > 0.5,
+            [o, i] => i > o || (i == o && self.winding_number(p).abs() > 0.5),
+        }
     }
 
     /// Inside test: points on the surface count as inside.
@@ -148,8 +231,65 @@ impl Polyhedron {
         if self.on_surface(p) {
             return true;
         }
-        self.closed && self.winding_number(p).abs() > 0.5
+        self.closed && self.inside_closed(p)
     }
+}
+
+/// Slab test of a ray (origin `o`, inverse direction `inv`, `t ≥ 0`)
+/// against a box.
+#[inline]
+fn ray_hits_box(o: Vec3, inv: Vec3, b: &BoundingBox) -> bool {
+    let mut t0 = 0.0f64;
+    let mut t1 = f64::INFINITY;
+    for k in 0..3 {
+        let a = (b.min[k] - o[k]) * inv[k];
+        let c = (b.max[k] - o[k]) * inv[k];
+        let (lo, hi) = if a <= c { (a, c) } else { (c, a) };
+        t0 = t0.max(lo);
+        t1 = t1.min(hi);
+    }
+    t0 <= t1
+}
+
+enum RayHit {
+    Miss,
+    Hit,
+    /// The ray passes (nearly) through an edge or vertex.
+    Degenerate,
+}
+
+/// Möller–Trumbore ray/triangle intersection for `t > 0`.
+fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> RayHit {
+    const EPS: f64 = 1e-9;
+    let e1 = b - a;
+    let e2 = c - a;
+    let h = d.cross(e2);
+    let det = e1.dot(h);
+    let scale = e1.norm() * e2.norm();
+    if scale == 0.0 || det.abs() <= 1e-12 * scale {
+        // Degenerate triangle, or ray parallel to its plane: a ray lying in
+        // the plane is caught by the edge hits of the neighbouring faces.
+        return RayHit::Miss;
+    }
+    let f = 1.0 / det;
+    let s = o - a;
+    let u = f * s.dot(h);
+    if !(-EPS..=1.0 + EPS).contains(&u) {
+        return RayHit::Miss;
+    }
+    let q = s.cross(e1);
+    let v = f * d.dot(q);
+    if v < -EPS || u + v > 1.0 + EPS {
+        return RayHit::Miss;
+    }
+    let t = f * e2.dot(q);
+    if t <= 0.0 {
+        return RayHit::Miss;
+    }
+    if u <= EPS || v <= EPS || u + v >= 1.0 - EPS {
+        return RayHit::Degenerate;
+    }
+    RayHit::Hit
 }
 
 fn is_closed(faces: &[Vec<u32>]) -> bool {
@@ -261,5 +401,136 @@ mod tests {
         let s = Polyhedron::from_triangles(&tris).unwrap();
         assert_eq!(s.vertices().len(), 8);
         assert!(s.is_closed());
+    }
+
+    /// Deterministic LCG in [0, 1).
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    /// UV sphere (outward oriented).
+    fn sphere(n: u32, r: f64) -> Polyhedron {
+        let mut v = vec![Vec3::new(0.0, 0.0, r)];
+        for i in 1..n {
+            let th = core::f64::consts::PI * i as f64 / n as f64;
+            for j in 0..n {
+                let ph = core::f64::consts::TAU * j as f64 / n as f64;
+                v.push(Vec3::new(th.sin() * ph.cos(), th.sin() * ph.sin(), th.cos()) * r);
+            }
+        }
+        v.push(Vec3::new(0.0, 0.0, -r));
+        let south = (v.len() - 1) as u32;
+        let idx = |i: u32, j: u32| 1 + (i - 1) * n + (j % n);
+        let mut f = Vec::new();
+        for j in 0..n {
+            f.push(vec![0, idx(1, j), idx(1, j + 1)]);
+            f.push(vec![south, idx(n - 1, j + 1), idx(n - 1, j)]);
+        }
+        for i in 1..n - 1 {
+            for j in 0..n {
+                f.push(vec![idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                f.push(vec![idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+            }
+        }
+        Polyhedron::new(v, f).unwrap()
+    }
+
+    /// Non-convex closed mesh: an L-shaped prism (extruded along z).
+    fn l_prism() -> Polyhedron {
+        let outline = [
+            (0.0, 0.0),
+            (3.0, 0.0),
+            (3.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 3.0),
+            (0.0, 3.0),
+        ];
+        let n = outline.len() as u32;
+        let mut v: Vec<Vec3> = outline.iter().map(|&(x, y)| Vec3::new(x, y, 0.0)).collect();
+        v.extend(outline.iter().map(|&(x, y)| Vec3::new(x, y, 2.0)));
+        let mut f = vec![(0..n).rev().collect::<Vec<u32>>(), (n..2 * n).collect()];
+        for k in 0..n {
+            let k1 = (k + 1) % n;
+            f.push(vec![k, k1, n + k1, n + k]);
+        }
+        // The fan triangulation of the (non-convex) caps is wrong for an L
+        // outline, so split the caps explicitly into convex parts.
+        f.drain(..2);
+        f.push(vec![0, 3, 2, 1]);
+        f.push(vec![0, 5, 4, 3]);
+        f.push(vec![n, n + 1, n + 2, n + 3]);
+        f.push(vec![n, n + 3, n + 4, n + 5]);
+        Polyhedron::new(v, f).unwrap()
+    }
+
+    fn brute_on_surface(p: &Polyhedron, q: Vec3) -> bool {
+        let eps = p.surface_eps();
+        p.tris.iter().any(|t| {
+            let [a, b, c] = p.tri(t);
+            (closest_on_triangle(q, a, b, c) - q).norm() <= eps
+        })
+    }
+
+    fn cross_check(p: &Polyhedron, lo: f64, hi: f64, n: usize, seed: u64) {
+        assert!(p.is_closed());
+        let mut rng = Lcg(seed);
+        for _ in 0..n {
+            let q = Vec3::new(
+                lo + (hi - lo) * rng.next(),
+                lo + (hi - lo) * rng.next(),
+                lo + (hi - lo) * rng.next(),
+            );
+            let w = p.winding_number(q).abs() > 0.5 || brute_on_surface(p, q);
+            assert_eq!(p.contains(q), w, "point {q:?}");
+            assert_eq!(p.on_surface(q), brute_on_surface(p, q), "point {q:?}");
+        }
+    }
+
+    #[test]
+    fn bvh_matches_winding_number() {
+        cross_check(&sphere(24, 1.0), -1.2, 1.2, 3000, 1);
+        cross_check(&unit_cube(), -0.2, 1.2, 3000, 2);
+        cross_check(&l_prism(), -0.5, 3.5, 3000, 3);
+    }
+
+    #[test]
+    fn grid_aligned_points() {
+        // Points on a regular lattice hit edges/vertices of axis-aligned
+        // meshes in the axis directions; the skewed rays must not care.
+        let c = l_prism();
+        for i in 0..=14 {
+            for j in 0..=14 {
+                for k in 0..=10 {
+                    let q = Vec3::new(
+                        i as f64 * 0.25 - 0.25,
+                        j as f64 * 0.25 - 0.25,
+                        k as f64 * 0.25 - 0.25,
+                    );
+                    let w = c.winding_number(q).abs() > 0.5 || brute_on_surface(&c, q);
+                    assert_eq!(c.contains(q), w, "point {q:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn surface_points() {
+        let s = sphere(16, 2.0);
+        let mut rng = Lcg(9);
+        for t in s.triangles().iter().take(200) {
+            let [a, b, c] = s.tri(t);
+            let (u, v) = (rng.next() * 0.5, rng.next() * 0.5);
+            let q = a + (b - a) * u + (c - a) * v;
+            assert!(s.on_surface(q));
+            assert!(s.contains(q));
+        }
     }
 }

@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::grid::RectilinearGrid;
 use crate::math::{BoundingBox, Vec3};
 use crate::param::{ParameterSet, Scalar};
+use crate::primitives::bvh::Bvh;
 use crate::primitives::{Primitive, Shape};
 use crate::properties::{MaterialQuantity, Property, PropertyKind, TypeMask};
 
@@ -362,10 +363,15 @@ struct Entry<'a> {
     hit: Hit<'a>,
 }
 
-/// Point-query accelerator over a borrowed structure: primitives are
-/// pre-sorted by priority and culled with their bounding boxes.
+/// Point-query accelerator over a borrowed structure.
+///
+/// Primitives are ranked by priority (highest first, ties: last added
+/// first) and their bounding boxes are stored in a bounding volume
+/// hierarchy, so a query only runs exact inside tests on the few primitives
+/// whose boxes contain the point, in rank order.
 pub struct SpatialIndex<'a> {
     entries: Vec<Entry<'a>>,
+    bvh: Bvh,
     cs: CoordSystem,
     default_cs: CoordSystem,
 }
@@ -379,9 +385,15 @@ impl<'a> SpatialIndex<'a> {
             .filter(|q| mask.contains(q.property_type()))
         {
             for (i, prim) in prop.primitives.iter().enumerate() {
-                let bbox = prim
-                    .bounding_box(s.coord_system)
-                    .expanded(1e-9 * prim.bounding_box(s.coord_system).size().norm());
+                let b = prim.bounding_box(s.coord_system);
+                // Pad by a tolerance comparable to the one used by the
+                // shapes' own inside tests (relative to size and position).
+                let scale = b.size().norm().max(b.min.norm()).max(b.max.norm());
+                let bbox = if b.is_empty() {
+                    b
+                } else {
+                    b.expanded(1e-9 * scale)
+                };
                 entries.push(Entry {
                     bbox,
                     hit: Hit {
@@ -394,7 +406,9 @@ impl<'a> SpatialIndex<'a> {
         }
         entries.reverse();
         entries.sort_by_key(|e| core::cmp::Reverse(e.hit.primitive.priority));
+        let boxes: Vec<BoundingBox> = entries.iter().map(|e| e.bbox).collect();
         SpatialIndex {
+            bvh: Bvh::build(&boxes),
             entries,
             cs,
             default_cs: s.coord_system,
@@ -404,9 +418,34 @@ impl<'a> SpatialIndex<'a> {
     /// Same semantics as [`ContinuousStructure::property_at`].
     pub fn query(&self, p: Vec3) -> Option<Hit<'a>> {
         let c = self.cs.to_cartesian(p);
-        self.entries
-            .iter()
-            .filter(|e| e.bbox.contains(c))
+        // Candidate ranks (indices into `entries`), kept on the stack when
+        // there are few of them.
+        let mut buf = [0u32; 32];
+        let mut n = 0usize;
+        let mut spill: Vec<u32> = Vec::new();
+        self.bvh.visit(
+            |b| b.contains(c),
+            |i| {
+                if self.entries[i as usize].bbox.contains(c) {
+                    if n < buf.len() {
+                        buf[n] = i;
+                        n += 1;
+                    } else {
+                        spill.push(i);
+                    }
+                }
+                true
+            },
+        );
+        let cand: &mut [u32] = if spill.is_empty() {
+            &mut buf[..n]
+        } else {
+            spill.extend_from_slice(&buf[..n]);
+            &mut spill
+        };
+        cand.sort_unstable();
+        cand.iter()
+            .map(|&i| &self.entries[i as usize])
             .find(|e| {
                 e.hit
                     .primitive
@@ -546,5 +585,57 @@ mod tests {
         );
         assert!(s.validate().is_empty());
         assert!(s.remove_property(id).is_some());
+    }
+
+    #[test]
+    fn index_matches_linear_scan() {
+        use crate::primitives::UserDefined;
+
+        let mut seed = 11u64;
+        let mut rnd = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut s = ContinuousStructure::new();
+        for k in 0..60 {
+            let id = s.add_property(Property::material(format!("m{k}"), Material::new(1.0, 0.0)));
+            // Several primitives per property, few distinct priorities so
+            // that ties are common.
+            for _ in 0..1 + k % 3 {
+                let c = Vec3::new(rnd() * 20.0, rnd() * 20.0, rnd() * 20.0);
+                let d = Vec3::new(rnd() * 4.0, rnd() * 4.0, rnd() * 4.0);
+                let prim = if rnd() < 0.7 {
+                    Primitive::new(BoxShape::new(c - d, c + d))
+                } else {
+                    Primitive::new(Sphere::new(c, d[0]))
+                };
+                s.add_primitive(id, prim.with_priority((rnd() * 4.0) as i32))
+                    .unwrap();
+            }
+        }
+        // An unbounded primitive must be found everywhere it applies.
+        let u = s.add_property(Property::metal("half"));
+        s.add_primitive(
+            u,
+            Primitive::new(UserDefined::new("z > 15")).with_priority(2),
+        )
+        .unwrap();
+        let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+        for _ in 0..5000 {
+            let p = Vec3::new(rnd() * 22.0 - 1.0, rnd() * 22.0 - 1.0, rnd() * 22.0 - 1.0);
+            let a = idx.query(p);
+            let b = s.property_at(p, CoordSystem::Cartesian, TypeMask::ANY);
+            match (a, b) {
+                (None, None) => {}
+                (Some(a), Some(b)) => {
+                    assert!(core::ptr::eq(a.primitive, b.primitive), "point {p:?}");
+                    assert_eq!(a.property.id(), b.property.id());
+                    assert_eq!(a.primitive_index, b.primitive_index);
+                }
+                _ => panic!("index and linear scan disagree at {p:?}"),
+            }
+        }
     }
 }

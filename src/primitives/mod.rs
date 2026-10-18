@@ -14,6 +14,7 @@
 //! they describe annular sectors; every other shape is always Cartesian.
 
 mod basic;
+pub(crate) mod bvh;
 mod curve;
 mod geom;
 mod poly;
