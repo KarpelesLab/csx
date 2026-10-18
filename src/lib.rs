@@ -42,6 +42,7 @@
 //! the observable file format only.
 
 pub mod coords;
+pub mod discretize;
 pub mod error;
 pub mod expr;
 pub mod fdtd;
