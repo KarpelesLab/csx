@@ -227,16 +227,16 @@ impl Shape {
     pub fn contains_local(&self, p: Vec3, cs: CoordSystem) -> bool {
         match self {
             Shape::Box(s) => s.inside(p, cs),
-            Shape::MultiBox(s) => s.inside(p, cs),
-            Shape::Sphere(s) => s.inside(p),
-            Shape::SphericalShell(s) => s.inside(p),
-            Shape::Cylinder(s) => s.inside(p),
-            Shape::CylindricalShell(s) => s.inside(p),
+            Shape::MultiBox(s) => s.inside(p),
+            Shape::Sphere(s) => s.inside(p, cs),
+            Shape::SphericalShell(s) => s.inside(p, cs),
+            Shape::Cylinder(s) => s.inside(p, cs),
+            Shape::CylindricalShell(s) => s.inside(p, cs),
             Shape::Polygon(s) => s.inside(p),
             Shape::LinPoly(s) => s.inside(p),
             Shape::RotPoly(s) => s.inside(p),
             Shape::Curve(s) => s.inside(p),
-            Shape::Wire(s) => s.inside(p),
+            Shape::Wire(s) => s.inside(p, cs),
             Shape::Point(s) => s.inside(p),
             Shape::Polyhedron(s) => s.contains(p),
             Shape::PolyhedronReader(s) => s.mesh.as_ref().is_some_and(|m| m.contains(p)),
@@ -248,17 +248,17 @@ impl Shape {
     pub fn local_bbox(&self, cs: CoordSystem) -> BoundingBox {
         match self {
             Shape::Box(s) => s.bbox(cs),
-            Shape::MultiBox(s) => s.bbox(cs),
-            Shape::Sphere(s) => s.bbox(),
-            Shape::SphericalShell(s) => s.bbox(),
-            Shape::Cylinder(s) => s.bbox(),
-            Shape::CylindricalShell(s) => s.bbox(),
+            Shape::MultiBox(s) => s.bbox(),
+            Shape::Sphere(s) => s.bbox(cs),
+            Shape::SphericalShell(s) => s.bbox(cs),
+            Shape::Cylinder(s) => s.bbox(cs),
+            Shape::CylindricalShell(s) => s.bbox(cs),
             Shape::Polygon(s) => s.bbox(),
             Shape::LinPoly(s) => s.bbox(),
             Shape::RotPoly(s) => s.bbox(),
-            Shape::Curve(s) => s.bbox(),
-            Shape::Wire(s) => s.bbox(),
-            Shape::Point(s) => s.bbox(),
+            Shape::Curve(s) => s.bbox(cs),
+            Shape::Wire(s) => s.bbox(cs),
+            Shape::Point(s) => s.bbox(cs),
             Shape::Polyhedron(s) => s.bounding_box(),
             Shape::PolyhedronReader(s) => s
                 .mesh
@@ -273,7 +273,6 @@ impl Shape {
     fn native_bbox(&self) -> Option<BoundingBox> {
         match self {
             Shape::Box(s) => Some(s.native()),
-            Shape::MultiBox(s) => Some(s.native()),
             _ => None,
         }
     }
@@ -595,13 +594,51 @@ mod tests {
         ));
         assert!(w.contains(Vec3::new(1.05, 0.5, 0.0), CoordSystem::Cartesian));
         assert!(!w.contains(Vec3::new(0.5, 0.5, 0.0), CoordSystem::Cartesian));
+        // Curves and points never contain anything (verified in CSXCAD).
         let c = Primitive::new(Curve::new([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]));
-        assert!(c.contains(Vec3::new(0.5, 0.0, 0.0), CoordSystem::Cartesian));
-        assert!(!c.contains(Vec3::new(0.5, 1e-6, 0.0), CoordSystem::Cartesian));
+        assert!(!c.contains(Vec3::new(0.5, 0.0, 0.0), CoordSystem::Cartesian));
         assert_eq!(c.dimension(), 1);
         let p = Primitive::new(PointShape::new([1.0, 2.0, 3.0]));
-        assert!(p.contains(Vec3::new(1.0, 2.0, 3.0), CoordSystem::Cartesian));
+        assert!(!p.contains(Vec3::new(1.0, 2.0, 3.0), CoordSystem::Cartesian));
         assert_eq!(p.dimension(), 0);
+    }
+
+    /// Coordinate system semantics observed in CSXCAD 0.7.
+    #[test]
+    fn cylindrical_definitions() {
+        let cyl = CoordSystem::Cylindrical;
+        let half = core::f64::consts::FRAC_PI_2;
+        let cart = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
+        // Defining points of round shapes are converted: center (1, π/2, 0)
+        // is the Cartesian point (0, 1, 0).
+        let s = Primitive::new(Sphere::new([1.0, half, 0.0], 0.1)).with_coord_system(cyl);
+        assert!(s.contains(cart(0.0, 1.0, 0.0), CoordSystem::Cartesian));
+        assert!(!s.contains(cart(1.0, half, 0.0), CoordSystem::Cartesian));
+        let c = Primitive::new(Cylinder::new([1.0, half, 0.0], [1.0, half, 1.0], 0.1))
+            .with_coord_system(cyl);
+        assert!(c.contains(cart(0.0, 1.0, 0.5), CoordSystem::Cartesian));
+        let w = Primitive::new(Wire::new([[1.0, half, 0.0], [1.0, half, 1.0]], 0.1))
+            .with_coord_system(cyl);
+        assert!(w.contains(cart(0.0, 1.0, 0.5), CoordSystem::Cartesian));
+        let p = Primitive::new(PointShape::new([2.0, half, 1.0])).with_coord_system(cyl);
+        let b = p.bounding_box(CoordSystem::Cartesian);
+        assert!((b.min - cart(0.0, 2.0, 1.0)).norm() < 1e-12);
+        // Multi-boxes stay Cartesian: (1.9, 0.6) is outside the box
+        // [1,2]×[-0.5,0.5] even though it lies in the sector.
+        let m = Primitive::new(MultiBox {
+            boxes: vec![([1.0, -0.5, 0.0].into(), [2.0, 0.5, 1.0].into())],
+        })
+        .with_coord_system(cyl);
+        assert!(!m.contains(cart(1.9, 0.6, 0.5), CoordSystem::Cartesian));
+        assert!(m.contains(cart(1.5, 0.0, 0.5), CoordSystem::Cartesian));
+        // A box is a sector.
+        let bx =
+            Primitive::new(BoxShape::new([1.0, -0.5, 0.0], [2.0, 0.5, 1.0])).with_coord_system(cyl);
+        assert!(bx.contains(cart(1.9, 0.6, 0.5), CoordSystem::Cartesian));
+        // Primitives without an explicit system inherit the structure's.
+        let implicit = Primitive::new(BoxShape::new([1.0, -0.5, 0.0], [2.0, 0.5, 1.0]));
+        assert!(implicit.contains_in(Vec3::new(1.9, 0.3, 0.5), cyl, cyl));
+        assert!(!implicit.contains_in(Vec3::new(1.9, 0.6, 0.5), cyl, cyl));
     }
 
     #[test]

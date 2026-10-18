@@ -254,23 +254,45 @@ fn cartesian_and_cylindrical_queries_agree() {
     }
 }
 
+/// Re-expresses the defining points of a round shape in cylindrical
+/// coordinates (identity for shapes that are always Cartesian).
+fn to_cylindrical_points(prim: &Primitive) -> Primitive {
+    use csx::Shape;
+    let c =
+        |p: &csx::ScalarPoint| -> csx::ScalarPoint { cartesian_to_cylindrical(p.value()).into() };
+    let mut out = prim.clone();
+    match &mut out.shape {
+        Shape::Sphere(s) => s.center = c(&s.center),
+        Shape::SphericalShell(s) => s.center = c(&s.center),
+        Shape::Cylinder(s) => {
+            s.start = c(&s.start);
+            s.stop = c(&s.stop);
+        }
+        Shape::CylindricalShell(s) => {
+            s.start = c(&s.start);
+            s.stop = c(&s.stop);
+        }
+        Shape::Wire(w) => w.points = w.points.iter().map(c).collect(),
+        _ => {}
+    }
+    out.with_coord_system(CoordSystem::Cylindrical)
+}
+
 #[test]
-fn primitive_coord_system_only_affects_boxes() {
-    // Non-box shapes are Cartesian even when the primitive (or structure
-    // default) is cylindrical.
+fn primitive_coord_system_semantics() {
+    // As observed in CSXCAD: round shapes (spheres, cylinders, their shells,
+    // wires) take their defining points in the primitive's coordinate
+    // system; multi-boxes, polygons and polyhedra are always Cartesian.
     let mut rng = Lcg(13);
     for iter in 0..400 {
         let kind = 2 + iter % (SOLID_KINDS - 2);
-        if kind == 2 {
-            continue; // multibox depends on the coordinate system
-        }
         let prim = random_shape(&mut rng, kind);
-        let cyl = prim.clone().with_coord_system(CoordSystem::Cylindrical);
+        let cyl = to_cylindrical_points(&prim);
         let probe = prim.bounding_box(CoordSystem::Cartesian).expanded(0.3);
-        assert_eq!(
-            probe,
-            cyl.bounding_box(CoordSystem::Cylindrical).expanded(0.3),
-            "kind {kind}"
+        let pb = cyl.bounding_box(CoordSystem::Cylindrical).expanded(0.3);
+        assert!(
+            (probe.min - pb.min).norm() < 1e-9 && (probe.max - pb.max).norm() < 1e-9,
+            "kind {kind}: {probe:?} vs {pb:?}"
         );
         for _ in 0..100 {
             let p = Vec3::new(
@@ -278,10 +300,15 @@ fn primitive_coord_system_only_affects_boxes() {
                 rng.range(probe.min[1], probe.max[1]),
                 rng.range(probe.min[2], probe.max[2]),
             );
-            assert_eq!(
-                prim.contains(p, CoordSystem::Cartesian),
-                cyl.contains(p, CoordSystem::Cartesian)
-            );
+            let a = prim.contains(p, CoordSystem::Cartesian);
+            if a != cyl.contains(p, CoordSystem::Cartesian) {
+                // Only points within rounding distance of the surface may
+                // differ (the converted points are not bit-identical).
+                let near = [1e-9, -1e-9]
+                    .iter()
+                    .any(|&e| prim.contains(p * (1.0 + e), CoordSystem::Cartesian) != a);
+                assert!(near, "kind {kind} at {p:?}");
+            }
         }
     }
 }

@@ -234,7 +234,8 @@ impl ContinuousStructure {
 
     /// Finds the highest-priority primitive containing `p` (expressed in
     /// `cs`) among properties matching `mask`. On equal priority the
-    /// primitive added last wins.
+    /// primitive of the earlier property (then the earlier primitive) wins,
+    /// as in CSXCAD.
     pub fn property_at(
         &self,
         p: Vec3,
@@ -249,7 +250,7 @@ impl ContinuousStructure {
             .filter(|q| mask.contains(q.property_type()))
         {
             for (i, prim) in prop.primitives.iter().enumerate() {
-                if best.is_some_and(|b| b.primitive.priority > prim.priority) {
+                if best.is_some_and(|b| b.primitive.priority >= prim.priority) {
                     continue;
                 }
                 if prim.contains_in(p, cs, self.coord_system) {
@@ -289,8 +290,7 @@ impl ContinuousStructure {
                 }
             }
         }
-        // stable sort keeps insertion order; reverse so later ones win ties
-        hits.reverse();
+        // stable sort keeps insertion order, so earlier ones win ties
         hits.sort_by_key(|h| core::cmp::Reverse(h.primitive.priority));
         hits
     }
@@ -390,7 +390,7 @@ struct Entry<'a> {
 
 /// Point-query accelerator over a borrowed structure.
 ///
-/// Primitives are ranked by priority (highest first, ties: last added
+/// Primitives are ranked by priority (highest first, ties: first added
 /// first) and their bounding boxes are stored in a bounding volume
 /// hierarchy, so a query only runs exact inside tests on the few primitives
 /// whose boxes contain the point, in rank order.
@@ -429,7 +429,6 @@ impl<'a> SpatialIndex<'a> {
                 });
             }
         }
-        entries.reverse();
         entries.sort_by_key(|e| core::cmp::Reverse(e.hit.primitive.priority));
         let boxes: Vec<BoundingBox> = entries.iter().map(|e| e.bbox).collect();
         SpatialIndex {
@@ -501,6 +500,27 @@ mod tests {
         )
         .unwrap();
         s
+    }
+
+    /// On equal priority the earlier property wins (verified in CSXCAD).
+    #[test]
+    fn priority_ties() {
+        let mut s = ContinuousStructure::new();
+        let a = s.add_property(Property::material("A", Material::new(2.0, 0.0)));
+        let b = s.add_property(Property::material("B", Material::new(3.0, 0.0)));
+        let unit =
+            || Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])).with_priority(3);
+        s.add_primitive(b, unit()).unwrap();
+        s.add_primitive(a, unit()).unwrap();
+        let p = Vec3::new(0.5, 0.5, 0.5);
+        let hit = s
+            .property_at(p, CoordSystem::Cartesian, TypeMask::ANY)
+            .unwrap();
+        assert_eq!(hit.property.name, "A");
+        let all = s.properties_at(p, CoordSystem::Cartesian, TypeMask::ANY);
+        assert_eq!(all[0].property.name, "A");
+        let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+        assert_eq!(idx.query(p).unwrap().property.name, "A");
     }
 
     #[test]
