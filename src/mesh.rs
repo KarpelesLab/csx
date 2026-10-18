@@ -61,36 +61,42 @@ impl MeshOptions {
     }
 
     /// Builder: per-axis maximum resolution.
+    #[must_use]
     pub fn with_max_res(mut self, max_res: [f64; 3]) -> Self {
         self.max_res = max_res;
         self
     }
 
     /// Builder: growth ratio.
+    #[must_use]
     pub fn with_ratio(mut self, ratio: f64) -> Self {
         self.ratio = ratio;
         self
     }
 
     /// Builder: minimum line distance (merging threshold).
+    #[must_use]
     pub fn with_min_res(mut self, min_res: [f64; 3]) -> Self {
         self.min_res = Some(min_res);
         self
     }
 
     /// Builder: enables the thirds rule with resolution `d` per axis.
+    #[must_use]
     pub fn with_thirds(mut self, d: [f64; 3]) -> Self {
         self.thirds = Some(d);
         self
     }
 
     /// Builder: the same margin on both sides of every axis.
+    #[must_use]
     pub fn with_margin(mut self, m: f64) -> Self {
         self.margin = [[m; 2]; 3];
         self
     }
 
     /// Builder: property filter.
+    #[must_use]
     pub fn with_mask(mut self, mask: impl Into<TypeMask>) -> Self {
         self.mask = mask.into();
         self
@@ -100,6 +106,7 @@ impl MeshOptions {
 /// Collects candidate mesh lines from all primitives of properties matching
 /// `mask`, expressed in the coordinate system `cs` (`ρ, α, z` lines for
 /// cylindrical meshes). The result is sorted and de-duplicated.
+#[must_use]
 pub fn detect_edges(
     s: &ContinuousStructure,
     mask: impl Into<TypeMask>,
@@ -301,6 +308,7 @@ impl MeshBuilder {
     }
 
     /// Adds user-defined fixed lines along `dir`.
+    #[must_use]
     pub fn with_lines(mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Self {
         self.extra[dir].extend(lines);
         self

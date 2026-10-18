@@ -351,6 +351,7 @@ impl ContinuousStructure {
     }
 
     /// Builds an index for fast repeated point queries.
+    #[must_use]
     pub fn spatial_index(&self, cs: CoordSystem, mask: impl Into<TypeMask>) -> SpatialIndex<'_> {
         SpatialIndex::new(self, cs, mask.into())
     }
@@ -358,6 +359,7 @@ impl ContinuousStructure {
     /// Consistency checks: duplicate names, properties without primitives,
     /// primitives with empty or non-finite bounds. Returns human readable
     /// warnings.
+    #[must_use]
     pub fn validate(&self) -> Vec<String> {
         let mut w = Vec::new();
         for (i, p) in self.properties.iter().enumerate() {

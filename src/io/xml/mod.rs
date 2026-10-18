@@ -119,6 +119,7 @@ impl OpenEmsDocument {
     }
 
     /// Serialises to an `<openEMS>` document.
+    #[must_use]
     pub fn to_xml_string(&self) -> String {
         let mut root = Element::new("openEMS");
         if let Some(f) = &self.fdtd {
@@ -170,11 +171,13 @@ impl ContinuousStructure {
     }
 
     /// Serialises the structure with a `<ContinuousStructure>` root.
+    #[must_use]
     pub fn to_xml_string(&self) -> String {
         write::structure(self).to_document()
     }
 
     /// The `<ContinuousStructure>` element.
+    #[must_use]
     pub fn to_xml_element(&self) -> Element {
         write::structure(self)
     }

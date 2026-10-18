@@ -76,6 +76,7 @@ impl FdtdSettings {
 
     /// Builds an `<FDTD>` element (with `<Excitation>` and `<BoundaryCond>`
     /// children when set).
+    #[must_use]
     pub fn to_xml_element(&self) -> Element {
         let mut e = Element::new("FDTD");
         if let Some(n) = self.number_of_timesteps {
@@ -149,6 +150,7 @@ impl FdtdSettings {
 
     /// Like [`FdtdSettings::to_xml_element`] but keeps the unrelated child
     /// elements (anything but `<Excitation>` / `<BoundaryCond>`) of `base`.
+    #[must_use]
     pub fn merge_into_element(&self, base: &Element) -> Element {
         let mut e = self.to_xml_element();
         for c in &base.children {

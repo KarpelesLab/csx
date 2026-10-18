@@ -66,6 +66,7 @@ impl Element {
     }
 
     /// Builder variant of [`Element::set_attr`].
+    #[must_use]
     pub fn with_attr(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.set_attr(name, value);
         self
@@ -111,6 +112,7 @@ impl Element {
     }
 
     /// Serialises the element (pretty printed, 4-space indentation).
+    #[must_use]
     pub fn to_xml(&self) -> String {
         let mut out = String::new();
         self.write_into(&mut out, 0);
@@ -118,6 +120,7 @@ impl Element {
     }
 
     /// Serialises the element preceded by an XML declaration.
+    #[must_use]
     pub fn to_document(&self) -> String {
         let mut out =
             String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n");

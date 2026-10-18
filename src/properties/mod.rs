@@ -373,6 +373,7 @@ impl Property {
     }
 
     /// Builder: sets fill and edge colour.
+    #[must_use]
     pub fn with_color(mut self, c: Rgba) -> Self {
         self.fill_color = c;
         self.edge_color = c;
@@ -390,6 +391,7 @@ impl Property {
     }
 
     /// Adds a primitive, returning `self` for chaining.
+    #[must_use]
     pub fn with_primitive(mut self, p: impl Into<Primitive>) -> Self {
         self.primitives.push(p.into());
         self

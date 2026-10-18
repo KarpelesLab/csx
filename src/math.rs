@@ -47,6 +47,7 @@ impl Vec3 {
     }
 
     /// Cross product.
+    #[must_use]
     #[inline]
     pub fn cross(self, o: Vec3) -> Vec3 {
         Vec3::new(
@@ -69,12 +70,14 @@ impl Vec3 {
     }
 
     /// Returns the vector scaled to unit length (or zero if it has no length).
+    #[must_use]
     pub fn normalized(self) -> Vec3 {
         let n = self.norm();
         if n > 0.0 { self / n } else { Vec3::ZERO }
     }
 
     /// Component-wise minimum.
+    #[must_use]
     #[inline]
     pub fn min(self, o: Vec3) -> Vec3 {
         Vec3::new(
@@ -85,6 +88,7 @@ impl Vec3 {
     }
 
     /// Component-wise maximum.
+    #[must_use]
     #[inline]
     pub fn max(self, o: Vec3) -> Vec3 {
         Vec3::new(
@@ -252,6 +256,7 @@ impl Mat4 {
     }
 
     /// Matrix product `self · o` (applies `o` first, then `self`).
+    #[must_use]
     pub fn mul(&self, o: &Mat4) -> Mat4 {
         let mut r = [[0.0; 4]; 4];
         for (i, row) in r.iter_mut().enumerate() {
@@ -263,6 +268,7 @@ impl Mat4 {
     }
 
     /// Transposed matrix.
+    #[must_use]
     pub fn transpose(&self) -> Mat4 {
         Mat4(core::array::from_fn(|i| {
             core::array::from_fn(|j| self.0[j][i])
@@ -388,6 +394,7 @@ impl BoundingBox {
     }
 
     /// Union of two boxes.
+    #[must_use]
     pub fn union(&self, o: &BoundingBox) -> BoundingBox {
         if self.is_empty() {
             return *o;
@@ -402,6 +409,7 @@ impl BoundingBox {
     }
 
     /// Intersection of two boxes (possibly empty).
+    #[must_use]
     pub fn intersection(&self, o: &BoundingBox) -> BoundingBox {
         BoundingBox {
             min: self.min.max(o.min),
@@ -410,6 +418,7 @@ impl BoundingBox {
     }
 
     /// Box enlarged by `d` on every side.
+    #[must_use]
     pub fn expanded(&self, d: f64) -> BoundingBox {
         let e = Vec3::new(d, d, d);
         BoundingBox {
@@ -452,6 +461,7 @@ impl BoundingBox {
     }
 
     /// Bounding box of this box after an affine transformation.
+    #[must_use]
     pub fn transformed(&self, m: &Mat4) -> BoundingBox {
         if self.is_empty() {
             return *self;

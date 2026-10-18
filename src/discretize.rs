@@ -83,18 +83,21 @@ impl Default for DiscretizeOptions {
 
 impl DiscretizeOptions {
     /// Builder: sub-samples per axis and quarter / half cell.
+    #[must_use]
     pub fn with_subsampling(mut self, n: usize) -> Self {
         self.subsampling = n;
         self
     }
 
     /// Builder: worker threads (0 = available parallelism).
+    #[must_use]
     pub fn with_threads(mut self, n: usize) -> Self {
         self.threads = n;
         self
     }
 
     /// Builder: relative snapping tolerance.
+    #[must_use]
     pub fn with_snap_tolerance(mut self, tol: f64) -> Self {
         self.snap_tolerance = tol;
         self

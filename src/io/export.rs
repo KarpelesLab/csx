@@ -8,11 +8,13 @@ use crate::structure::ContinuousStructure;
 use crate::tessellate::{TessellationOptions, TriMesh, tessellate_structure};
 
 /// Binary STL of a mesh.
+#[must_use]
 pub fn stl_binary(mesh: &TriMesh) -> Vec<u8> {
     super::stl::write_binary(&mesh.triangle_soup())
 }
 
 /// ASCII STL of a mesh; `name` is written after `solid`.
+#[must_use]
 pub fn stl_ascii(mesh: &TriMesh, name: &str) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();
     let mut s = format!("solid {name}\n");
@@ -30,6 +32,7 @@ pub fn stl_ascii(mesh: &TriMesh, name: &str) -> String {
 }
 
 /// ASCII PLY of a mesh.
+#[must_use]
 pub fn ply_ascii(mesh: &TriMesh) -> String {
     let mut s = String::new();
     let _ = write!(
@@ -72,18 +75,21 @@ impl Default for VtkOptions {
 
 impl VtkOptions {
     /// Builder: tessellation resolution.
+    #[must_use]
     pub fn with_tessellation(mut self, t: TessellationOptions) -> Self {
         self.tessellation = t;
         self
     }
 
     /// Builder: which properties to export.
+    #[must_use]
     pub fn with_mask(mut self, mask: impl Into<TypeMask>) -> Self {
         self.mask = mask.into();
         self
     }
 
     /// Builder: coordinate scale factor.
+    #[must_use]
     pub fn with_scale(mut self, scale: f64) -> Self {
         self.scale = scale;
         self
@@ -95,6 +101,7 @@ impl VtkOptions {
 /// Cell data: `property_index` (index into
 /// [`ContinuousStructure::properties`]) and `priority`; field data lists the
 /// property names (whitespace replaced by `_`) in index order.
+#[must_use]
 pub fn vtk_ascii(s: &ContinuousStructure, opts: &VtkOptions) -> String {
     let parts = tessellate_structure(s, opts.mask, &opts.tessellation);
     let mut points: Vec<Vec3> = Vec::new();

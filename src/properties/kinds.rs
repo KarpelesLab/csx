@@ -334,12 +334,14 @@ impl Excitation {
     }
 
     /// Builder: excitation type.
+    #[must_use]
     pub fn with_type(mut self, excitation_type: ExcitationType) -> Self {
         self.excitation_type = excitation_type;
         self
     }
 
     /// Builder: port / excitation number.
+    #[must_use]
     pub fn with_number(mut self, number: u32) -> Self {
         self.number = number;
         self
@@ -390,18 +392,21 @@ impl ProbeBox {
     }
 
     /// Builder: result weight.
+    #[must_use]
     pub fn with_weight(mut self, w: f64) -> Self {
         self.weight = Scalar::new(w);
         self
     }
 
     /// Builder: normal direction.
+    #[must_use]
     pub fn with_norm_dir(mut self, d: Axis) -> Self {
         self.norm_dir = Some(d);
         self
     }
 
     /// Builder: frequency-domain samples.
+    #[must_use]
     pub fn with_frequencies(mut self, f: impl IntoIterator<Item = f64>) -> Self {
         self.frequencies = f.into_iter().collect();
         self
@@ -451,6 +456,7 @@ impl DumpBox {
     }
 
     /// Builder: output file format.
+    #[must_use]
     pub fn with_file_type(mut self, file_type: DumpFileType) -> Self {
         self.file_type = file_type;
         self
@@ -513,12 +519,14 @@ impl LumpedElement {
     }
 
     /// Builder: capacitance (F).
+    #[must_use]
     pub fn with_c(mut self, c: f64) -> Self {
         self.c = Scalar::new(c);
         self
     }
 
     /// Builder: inductance (H).
+    #[must_use]
     pub fn with_l(mut self, l: f64) -> Self {
         self.l = Scalar::new(l);
         self

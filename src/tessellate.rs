@@ -39,12 +39,14 @@ impl Default for TessellationOptions {
 
 impl TessellationOptions {
     /// Builder: segments per full circle.
+    #[must_use]
     pub fn with_segments(mut self, segments: usize) -> Self {
         self.segments = segments;
         self
     }
 
     /// Builder: latitude bands of spheres.
+    #[must_use]
     pub fn with_sphere_rings(mut self, rings: usize) -> Self {
         self.sphere_rings = rings;
         self
@@ -320,6 +322,7 @@ fn signed_area(v: &[(f64, f64)]) -> f64 {
 
 /// Ear-clipping triangulation of a simple polygon given counter-clockwise.
 /// Returns triangles (CCW) as indices into `v`.
+#[must_use]
 pub fn triangulate_polygon(v: &[(f64, f64)]) -> Vec<[usize; 3]> {
     let n = v.len();
     let mut out = Vec::with_capacity(n.saturating_sub(2));
@@ -494,6 +497,7 @@ fn box_shape(s: &mut Soup, a: Vec3, b: Vec3, cs: CoordSystem, opts: &Tessellatio
 
 /// Tessellates a primitive in world Cartesian coordinates. `default_cs` is
 /// the structure's coordinate system (used by boxes without their own).
+#[must_use]
 pub fn tessellate(
     prim: &Primitive,
     default_cs: CoordSystem,
@@ -619,6 +623,7 @@ pub fn tessellate(
 /// World-space polyline of a curve or wire primitive (empty for others).
 /// `default_cs` is the structure's coordinate system; vertices of
 /// primitives in a cylindrical system are converted from `(ρ, α, z)`.
+#[must_use]
 pub fn polyline(prim: &Primitive, default_cs: CoordSystem) -> Vec<Vec3> {
     let shape = prim.cartesian_shape(default_cs);
     let pts: Vec<Vec3> = match &*shape {
@@ -650,6 +655,7 @@ pub struct TessellatedPrimitive {
 }
 
 /// Tessellates every primitive of properties matching `mask`.
+#[must_use]
 pub fn tessellate_structure(
     s: &ContinuousStructure,
     mask: impl Into<TypeMask>,

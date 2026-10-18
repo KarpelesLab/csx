@@ -143,6 +143,7 @@ impl PolyhedronReader {
     }
 
     /// Builder: overrides the file type.
+    #[must_use]
     pub fn with_file_type(mut self, t: MeshFileType) -> Self {
         self.set_file_type(t);
         self
@@ -483,18 +484,21 @@ impl Primitive {
     }
 
     /// Builder: sets the priority.
+    #[must_use]
     pub fn with_priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
     }
 
     /// Builder: sets the coordinate system.
+    #[must_use]
     pub fn with_coord_system(mut self, cs: CoordSystem) -> Self {
         self.coord_system = Some(cs);
         self
     }
 
     /// Builder: sets the transformation.
+    #[must_use]
     pub fn with_transform(mut self, t: Transform) -> Self {
         self.transform = t;
         self

@@ -95,6 +95,7 @@ fn parse_ascii(data: &[u8]) -> Result<Vec<[Vec3; 3]>> {
 }
 
 /// Serialises triangles as binary STL.
+#[must_use]
 pub fn write_binary(tris: &[[Vec3; 3]]) -> Vec<u8> {
     let mut out = vec![0u8; 80];
     out.extend_from_slice(&(tris.len() as u32).to_le_bytes());
