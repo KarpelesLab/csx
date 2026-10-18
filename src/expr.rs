@@ -10,7 +10,8 @@
 //!   minus so `-2^2 = -4`)
 //! * functions: `abs acos acosh asin asinh atan atan2 atanh cbrt ceil cos
 //!   cosh cot csc exp exp2 floor hypot if int log log2 log10 max min not pow
-//!   sec sin sinh sqrt tan tanh trunc`
+//!   sec sin sinh sqrt tan tanh trunc`, plus the Bessel functions `j0 j1
+//!   jn y0 y1 yn` (`jn(n, x)`, `yn(n, x)` with integer order `n`)
 //! * constants `pi` and `e` (overridable by variables / parameters)
 //!
 //! Booleans are `1` / `0`; any non-zero value is *true*.
@@ -65,6 +66,9 @@ enum Func {
     Hypot,
     If,
     Int,
+    J0,
+    J1,
+    Jn,
     Log,
     Log2,
     Log10,
@@ -79,6 +83,9 @@ enum Func {
     Tan,
     Tanh,
     Trunc,
+    Y0,
+    Y1,
+    Yn,
 }
 
 impl Func {
@@ -105,6 +112,9 @@ impl Func {
             "hypot" => (Hypot, 2),
             "if" => (If, 3),
             "int" => (Int, 1),
+            "j0" => (J0, 1),
+            "j1" => (J1, 1),
+            "jn" => (Jn, 2),
             "log" => (Log, 1),
             "log2" => (Log2, 1),
             "log10" => (Log10, 1),
@@ -119,6 +129,9 @@ impl Func {
             "tan" => (Tan, 1),
             "tanh" => (Tanh, 1),
             "trunc" => (Trunc, 1),
+            "y0" => (Y0, 1),
+            "y1" => (Y1, 1),
+            "yn" => (Yn, 2),
             _ => return None,
         })
     }
@@ -160,6 +173,12 @@ impl Func {
             Tan => a[0].tan(),
             Tanh => a[0].tanh(),
             Trunc => a[0].trunc(),
+            J0 => bessel::j0(a[0]),
+            J1 => bessel::j1(a[0]),
+            Jn => bessel::jn(a[0], a[1]),
+            Y0 => bessel::y0(a[0]),
+            Y1 => bessel::y1(a[0]),
+            Yn => bessel::yn(a[0], a[1]),
         }
     }
 }
@@ -357,8 +376,12 @@ pub struct Expr {
 impl Expr {
     /// Parses `src`.
     pub fn parse(src: &str) -> Result<Expr> {
-        let mut p = Parser { src, pos: 0 };
-        let root = p.parse_expr(0)?;
+        let mut p = Parser {
+            src,
+            pos: 0,
+            rec: 0,
+        };
+        let (root, _) = p.parse_expr(0)?;
         p.skip_ws();
         if p.pos != src.len() {
             return Err(p.err("unexpected trailing input"));
@@ -450,9 +473,18 @@ impl CompiledExpr {
     }
 }
 
+/// Maximum nesting depth of expressions (parser recursion and tree depth).
+///
+/// Parsing, evaluation and dropping of expression trees are recursive, so
+/// untrusted input is bounded to keep stack use small (well below 1 MiB
+/// even in debug builds). Each parenthesis level counts twice; each term of
+/// a left-associative chain such as `a+b+c` counts once.
+pub const MAX_DEPTH: usize = 256;
+
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
+    rec: usize,
 }
 
 impl Parser<'_> {
@@ -507,32 +539,57 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_expr(&mut self, min_bp: u8) -> Result<Node> {
-        let mut lhs = self.parse_unary()?;
+    /// Guards parser recursion (parentheses, unary chains, ...).
+    fn enter(&mut self) -> Result<()> {
+        self.rec += 1;
+        if self.rec > MAX_DEPTH {
+            return Err(self.err("expression nested too deeply"));
+        }
+        Ok(())
+    }
+
+    /// Builds a node of depth `depth`, rejecting trees deeper than
+    /// [`MAX_DEPTH`] (evaluation and drop are recursive).
+    fn node(&self, node: Node, depth: usize) -> Result<(Node, usize)> {
+        if depth > MAX_DEPTH {
+            return Err(self.err("expression nested too deeply"));
+        }
+        Ok((node, depth))
+    }
+
+    fn parse_expr(&mut self, min_bp: u8) -> Result<(Node, usize)> {
+        self.enter()?;
+        let (mut lhs, mut d) = self.parse_unary()?;
         while let Some((op, bp, len)) = self.peek_binop() {
             if bp < min_bp {
                 break;
             }
             self.pos += len;
             // `^` is right associative; everything else left associative.
-            let rhs = if op == BinOp::Pow {
+            let (rhs, rd) = if op == BinOp::Pow {
                 self.parse_pow_rhs()?
             } else {
                 self.parse_expr(bp + 1)?
             };
-            lhs = Node::Binary(op, Box::new(lhs), Box::new(rhs));
+            (lhs, d) = self.node(
+                Node::Binary(op, Box::new(lhs), Box::new(rhs)),
+                d.max(rd) + 1,
+            )?;
         }
-        Ok(lhs)
+        self.rec -= 1;
+        Ok((lhs, d))
     }
 
     /// Right-hand side of `^`: allows a unary sign (`2^-1`) and is right
     /// associative.
-    fn parse_pow_rhs(&mut self) -> Result<Node> {
+    fn parse_pow_rhs(&mut self) -> Result<(Node, usize)> {
+        self.enter()?;
         self.skip_ws();
-        match self.peek() {
+        let r = match self.peek() {
             Some(b'-') => {
                 self.pos += 1;
-                Ok(Node::Unary(UnOp::Neg, Box::new(self.parse_pow_rhs()?)))
+                let (n, d) = self.parse_pow_rhs()?;
+                self.node(Node::Unary(UnOp::Neg, Box::new(n)), d + 1)
             }
             Some(b'+') => {
                 self.pos += 1;
@@ -542,26 +599,33 @@ impl Parser<'_> {
                 let base = self.parse_atom()?;
                 self.maybe_pow(base)
             }
-        }
+        };
+        self.rec -= 1;
+        r
     }
 
-    fn maybe_pow(&mut self, base: Node) -> Result<Node> {
+    fn maybe_pow(&mut self, base: (Node, usize)) -> Result<(Node, usize)> {
         self.skip_ws();
         if self.peek() == Some(b'^') {
             self.pos += 1;
-            let e = self.parse_pow_rhs()?;
-            Ok(Node::Binary(BinOp::Pow, Box::new(base), Box::new(e)))
+            let (e, d) = self.parse_pow_rhs()?;
+            self.node(
+                Node::Binary(BinOp::Pow, Box::new(base.0), Box::new(e)),
+                base.1.max(d) + 1,
+            )
         } else {
             Ok(base)
         }
     }
 
-    fn parse_unary(&mut self) -> Result<Node> {
+    fn parse_unary(&mut self) -> Result<(Node, usize)> {
+        self.enter()?;
         self.skip_ws();
-        match self.peek() {
+        let r = match self.peek() {
             Some(b'-') => {
                 self.pos += 1;
-                Ok(Node::Unary(UnOp::Neg, Box::new(self.parse_unary()?)))
+                let (n, d) = self.parse_unary()?;
+                self.node(Node::Unary(UnOp::Neg, Box::new(n)), d + 1)
             }
             Some(b'+') => {
                 self.pos += 1;
@@ -569,16 +633,19 @@ impl Parser<'_> {
             }
             Some(b'!') if self.peek2() != Some(b'=') => {
                 self.pos += 1;
-                Ok(Node::Unary(UnOp::Not, Box::new(self.parse_unary()?)))
+                let (n, d) = self.parse_unary()?;
+                self.node(Node::Unary(UnOp::Not, Box::new(n)), d + 1)
             }
             _ => {
                 let a = self.parse_atom()?;
                 self.maybe_pow(a)
             }
-        }
+        };
+        self.rec -= 1;
+        r
     }
 
-    fn parse_atom(&mut self) -> Result<Node> {
+    fn parse_atom(&mut self) -> Result<(Node, usize)> {
         self.skip_ws();
         let start = self.pos;
         match self.peek() {
@@ -589,7 +656,7 @@ impl Parser<'_> {
                 self.expect(b')')?;
                 Ok(e)
             }
-            Some(c) if c.is_ascii_digit() || c == b'.' => self.parse_number(start),
+            Some(c) if c.is_ascii_digit() || c == b'.' => Ok((self.parse_number(start)?, 1)),
             Some(c) if c.is_ascii_alphabetic() || c == b'_' => {
                 while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == b'_') {
                     self.pos += 1;
@@ -603,12 +670,15 @@ impl Parser<'_> {
                     };
                     self.pos += 1;
                     let mut args = Vec::with_capacity(arity);
+                    let mut depth = 0;
                     self.skip_ws();
                     if self.peek() != Some(b')') {
                         loop {
-                            args.push(self.parse_expr(0)?);
+                            let (a, d) = self.parse_expr(0)?;
+                            args.push(a);
+                            depth = depth.max(d);
                             self.skip_ws();
-                            if self.peek() == Some(b',') {
+                            if self.peek() == Some(b',') && args.len() < arity {
                                 self.pos += 1;
                             } else {
                                 break;
@@ -623,9 +693,9 @@ impl Parser<'_> {
                             args.len()
                         )));
                     }
-                    Ok(Node::Call(f, args))
+                    self.node(Node::Call(f, args), depth + 1)
                 } else {
-                    Ok(Node::Name(name.to_owned()))
+                    Ok((Node::Name(name.to_owned()), 1))
                 }
             }
             Some(_) => Err(self.err("unexpected character")),
@@ -710,6 +780,329 @@ pub fn parse_number_lenient(s: &str) -> Option<f64> {
         });
     }
     None
+}
+
+/// Bessel functions of the first and second kind for integer orders.
+///
+/// Small arguments use the ascending power series; large arguments use the
+/// Hankel asymptotic expansion. Higher orders use recurrences (backward,
+/// normalised recurrence for `J_n` when `n > |x|`, forward otherwise).
+mod bessel {
+    use core::f64::consts::{FRAC_PI_4, PI};
+
+    /// Euler–Mascheroni constant.
+    const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+    /// Switch-over between power series and asymptotic expansion.
+    const SERIES_LIMIT: f64 = 12.0;
+
+    /// Hankel asymptotic expansion for order `nu` (0 or 1), `x > 0`:
+    /// returns `(J_nu(x), Y_nu(x))`.
+    fn asymptotic(nu: f64, x: f64) -> (f64, f64) {
+        let mu = 4.0 * nu * nu;
+        let (mut p, mut q) = (1.0, 0.0);
+        let mut term = 1.0f64;
+        let mut prev = f64::INFINITY;
+        for k in 1..60 {
+            let odd = (2 * k - 1) as f64;
+            term *= (mu - odd * odd) / (k as f64 * 8.0 * x);
+            if term.abs() >= prev || term.abs() < 1e-17 {
+                break;
+            }
+            prev = term.abs();
+            // k odd → Q with sign (-1)^((k-1)/2); k even → P with (-1)^(k/2)
+            let sign = if (k / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            if k % 2 == 1 {
+                q += sign * term;
+            } else {
+                p += sign * term;
+            }
+        }
+        let chi = x - (nu / 2.0) * PI - FRAC_PI_4;
+        let (s, c) = chi.sin_cos();
+        let amp = (2.0 / (PI * x)).sqrt();
+        (amp * (p * c - q * s), amp * (p * s + q * c))
+    }
+
+    /// Power series: `(J0, J1, Y0, Y1)` for `0 < x < SERIES_LIMIT`.
+    fn series(x: f64) -> (f64, f64, f64, f64) {
+        let h = x / 2.0;
+        let h2 = -h * h;
+        // J0 = Σ (-h²)^k/(k!)²; Y0 helper Σ (-1)^(k+1) H_k (h²)^k/(k!)²
+        let (mut j0, mut y0s) = (1.0, 0.0);
+        // J1 = h Σ (-h²)^k/(k!(k+1)!); Y1 helper Σ (-1)^k (ψ(k+1)+ψ(k+2)) h^(2k+1)/(k!(k+1)!)
+        let (mut j1, mut y1s) = (h, h * (1.0 - 2.0 * EULER_GAMMA));
+        let mut t0 = 1.0; // (-h²)^k/(k!)²
+        let mut t1 = h; // h (-h²)^k/(k!(k+1)!)
+        let mut hk = 0.0; // harmonic number H_k
+        for k in 1..200 {
+            let kf = k as f64;
+            t0 *= h2 / (kf * kf);
+            t1 *= h2 / (kf * (kf + 1.0));
+            hk += 1.0 / kf;
+            j0 += t0;
+            y0s -= hk * t0;
+            j1 += t1;
+            // ψ(k+1) + ψ(k+2) = 2 H_k + 1/(k+1) - 2γ
+            y1s += t1 * (2.0 * hk + 1.0 / (kf + 1.0) - 2.0 * EULER_GAMMA);
+            if t0.abs() < 1e-17 * j0.abs().max(1e-300) && t1.abs() < 1e-17 {
+                break;
+            }
+        }
+        let ln = h.ln();
+        let y0 = 2.0 / PI * ((ln + EULER_GAMMA) * j0 + y0s);
+        let y1 = 2.0 / PI * ln * j1 - 2.0 / (PI * x) - y1s / PI;
+        (j0, j1, y0, y1)
+    }
+
+    fn j01(x: f64) -> (f64, f64) {
+        let ax = x.abs();
+        let (j0, j1) = if ax == 0.0 {
+            (1.0, 0.0)
+        } else if ax < SERIES_LIMIT {
+            let (a, b, _, _) = series(ax);
+            (a, b)
+        } else if ax.is_finite() {
+            (asymptotic(0.0, ax).0, asymptotic(1.0, ax).0)
+        } else if ax.is_infinite() {
+            (0.0, 0.0)
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        (j0, if x < 0.0 { -j1 } else { j1 })
+    }
+
+    fn y01(x: f64) -> (f64, f64) {
+        if x.is_nan() || x < 0.0 {
+            (f64::NAN, f64::NAN)
+        } else if x == 0.0 {
+            (f64::NEG_INFINITY, f64::NEG_INFINITY)
+        } else if x < SERIES_LIMIT {
+            let (_, _, a, b) = series(x);
+            (a, b)
+        } else if x.is_infinite() {
+            (0.0, 0.0)
+        } else {
+            (asymptotic(0.0, x).1, asymptotic(1.0, x).1)
+        }
+    }
+
+    /// `J0(x)`.
+    pub fn j0(x: f64) -> f64 {
+        j01(x).0
+    }
+
+    /// `J1(x)`.
+    pub fn j1(x: f64) -> f64 {
+        j01(x).1
+    }
+
+    /// `Y0(x)` (NaN for negative arguments).
+    pub fn y0(x: f64) -> f64 {
+        y01(x).0
+    }
+
+    /// `Y1(x)` (NaN for negative arguments).
+    pub fn y1(x: f64) -> f64 {
+        y01(x).1
+    }
+
+    /// Converts a float order to an integer (rounded), rejecting absurd
+    /// magnitudes.
+    fn order(n: f64) -> Option<i64> {
+        (n.is_finite() && n.abs() <= 1e6).then(|| n.round() as i64)
+    }
+
+    /// `J_n(x)` for integer `n`.
+    pub fn jn(n: f64, x: f64) -> f64 {
+        let Some(n) = order(n) else { return f64::NAN };
+        if x.is_nan() {
+            return f64::NAN;
+        }
+        let sign_n = if n < 0 && n % 2 != 0 { -1.0 } else { 1.0 };
+        let m = n.unsigned_abs();
+        let sign_x = if x < 0.0 && m % 2 == 1 { -1.0 } else { 1.0 };
+        let ax = x.abs();
+        let v = match m {
+            0 => j0(ax),
+            1 => j1(ax),
+            _ if ax == 0.0 || ax.is_infinite() => 0.0,
+            _ if ax > m as f64 => {
+                // Forward recurrence is stable while k < x.
+                let (mut a, mut b) = (j0(ax), j1(ax));
+                for k in 1..m {
+                    let c = 2.0 * k as f64 / ax * b - a;
+                    a = b;
+                    b = c;
+                }
+                b
+            }
+            _ => {
+                // Miller's backward recurrence, normalised with
+                // J0 + 2 Σ J_2k = 1.
+                let start = 2 * ((m + 16 + (40.0 * m as f64).sqrt() as u64 + ax as u64) / 2);
+                let (mut next, mut cur) = (0.0f64, 1e-300f64);
+                let (mut sum, mut result) = (0.0f64, 0.0f64);
+                for k in (1..=start).rev() {
+                    let prev = 2.0 * k as f64 / ax * cur - next;
+                    next = cur;
+                    cur = prev; // cur = J_{k-1} (unnormalised)
+                    if k - 1 == m {
+                        result = cur;
+                    }
+                    if (k - 1) % 2 == 0 && k - 1 > 0 {
+                        sum += cur;
+                    }
+                    if cur.abs() > 1e250 {
+                        cur *= 1e-250;
+                        next *= 1e-250;
+                        sum *= 1e-250;
+                        result *= 1e-250;
+                    }
+                }
+                let norm = cur + 2.0 * sum; // cur = J0
+                result / norm
+            }
+        };
+        sign_n * sign_x * v
+    }
+
+    /// `Y_n(x)` for integer `n` (NaN for negative `x`).
+    pub fn yn(n: f64, x: f64) -> f64 {
+        let Some(n) = order(n) else { return f64::NAN };
+        let sign_n = if n < 0 && n % 2 != 0 { -1.0 } else { 1.0 };
+        let m = n.unsigned_abs();
+        let v = match m {
+            0 => y0(x),
+            1 => y1(x),
+            _ if x.is_nan() || x < 0.0 => f64::NAN,
+            _ if x == 0.0 => f64::NEG_INFINITY,
+            _ if x.is_infinite() => 0.0,
+            _ => {
+                let (mut a, mut b) = (y0(x), y1(x));
+                for k in 1..m {
+                    let c = 2.0 * k as f64 / x * b - a;
+                    a = b;
+                    b = c;
+                    if b.is_infinite() {
+                        break;
+                    }
+                }
+                b
+            }
+        };
+        sign_n * v
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn close(a: f64, b: f64, tol: f64) -> bool {
+            (a - b).abs() <= tol * b.abs().max(1.0)
+        }
+
+        #[test]
+        fn reference_values() {
+            // Reference values (Abramowitz & Stegun tables / standard libm).
+            let cases: [(f64, f64, f64, f64, f64); 8] = [
+                // x, J0, J1, Y0, Y1
+                (
+                    0.5,
+                    0.938_469_807_240_813,
+                    0.242_268_457_674_874,
+                    -0.444_518_733_506_707,
+                    -1.471_472_392_670_243,
+                ),
+                (
+                    1.0,
+                    0.765_197_686_557_967,
+                    0.440_050_585_744_934,
+                    0.088_256_964_215_677,
+                    -0.781_212_821_300_289,
+                ),
+                (
+                    2.5,
+                    -0.048_383_776_468_198,
+                    0.497_094_102_464_274,
+                    0.498_070_359_615_232,
+                    0.145_918_137_966_786,
+                ),
+                (
+                    5.0,
+                    -0.177_596_771_314_338,
+                    -0.327_579_137_591_465,
+                    -0.308_517_625_249_034,
+                    0.147_863_143_391_227,
+                ),
+                (
+                    10.0,
+                    -0.245_935_764_451_348,
+                    0.043_472_746_168_862,
+                    0.055_671_167_283_599,
+                    0.249_015_424_206_954,
+                ),
+                (
+                    11.9,
+                    0.025_049_441_699_590,
+                    -0.228_983_249_661_924,
+                    -0.229_833_213_943_375,
+                    -0.034_711_498_334_030,
+                ),
+                (
+                    12.1,
+                    0.069_666_773_606_808,
+                    -0.215_748_973_376_925,
+                    -0.218_438_380_550_925,
+                    -0.078_736_931_451_396,
+                ),
+                (
+                    50.0,
+                    0.055_812_327_669_252,
+                    -0.097_511_828_125_175,
+                    -0.098_064_995_470_077,
+                    -0.056_795_668_562_015,
+                ),
+            ];
+            for (x, a, b, c, d) in cases {
+                assert!(close(j0(x), a, 1e-9), "j0({x}) = {} want {a}", j0(x));
+                assert!(close(j1(x), b, 1e-9), "j1({x}) = {} want {b}", j1(x));
+                assert!(close(y0(x), c, 1e-9), "y0({x}) = {} want {c}", y0(x));
+                assert!(close(y1(x), d, 1e-9), "y1({x}) = {} want {d}", y1(x));
+            }
+            assert_eq!(j0(0.0), 1.0);
+            assert_eq!(j1(0.0), 0.0);
+            assert!(close(j1(-1.0), -0.440_050_585_744_934, 1e-12));
+            assert!(y0(-1.0).is_nan());
+            assert_eq!(y0(0.0), f64::NEG_INFINITY);
+        }
+
+        #[test]
+        fn integer_orders() {
+            // J_2(1), J_5(1), J_3(10), J_20(10), Y_2(1), Y_3(10)
+            assert!(close(jn(2.0, 1.0), 0.114_903_484_931_900, 1e-9));
+            assert!(close(jn(5.0, 1.0), 2.497_577_302_112_344e-4, 1e-9));
+            assert!(close(jn(3.0, 10.0), 0.058_379_379_305_187, 1e-9));
+            assert!(close(jn(20.0, 10.0), 1.151_336_924_781_34e-5, 1e-8));
+            assert!(close(yn(2.0, 1.0), -1.650_682_606_816_254, 1e-9));
+            assert!(close(yn(3.0, 10.0), -0.251_362_657_183_837, 1e-9));
+            // symmetries
+            assert!(close(jn(-3.0, 2.0), -jn(3.0, 2.0), 1e-14));
+            assert!(close(jn(3.0, -2.0), -jn(3.0, 2.0), 1e-14));
+            assert!(close(yn(-3.0, 2.0), -yn(3.0, 2.0), 1e-14));
+            assert_eq!(jn(4.0, 0.0), 0.0);
+            assert!(jn(f64::NAN, 1.0).is_nan());
+            assert!(jn(1e300, 1.0).is_nan());
+            // Recurrence identity J_{n-1} + J_{n+1} = 2n/x J_n
+            for &x in &[0.3, 3.7, 17.0, 40.0] {
+                for n in 1..15 {
+                    let n = n as f64;
+                    let l = jn(n - 1.0, x) + jn(n + 1.0, x);
+                    let r = 2.0 * n / x * jn(n, x);
+                    assert!((l - r).abs() < 1e-9, "n={n} x={x}: {l} vs {r}");
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

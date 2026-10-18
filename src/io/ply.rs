@@ -169,6 +169,26 @@ pub fn parse(data: &[u8]) -> Result<Polyhedron> {
     let mut verts = Vec::new();
     let mut faces = Vec::new();
     for el in &elements {
+        if el.props.is_empty() {
+            // Nothing to read; only meaningful for elements we ignore.
+            if el.name == "vertex" && el.count > 0 {
+                return Err(Error::Format(
+                    "PLY: vertex element without properties".into(),
+                ));
+            }
+            continue;
+        }
+        // Every instance consumes at least one byte, which bounds the
+        // allocations driven by the (untrusted) header counts.
+        if el.count > body.len() {
+            return Err(Error::Format(format!(
+                "PLY: element {:?} count {} exceeds the data size",
+                el.name, el.count
+            )));
+        }
+        if el.name == "vertex" {
+            verts.reserve(el.count);
+        }
         for _ in 0..el.count {
             let mut xyz = [0.0; 3];
             for p in &el.props {
@@ -177,7 +197,7 @@ pub fn parse(data: &[u8]) -> Result<Polyhedron> {
                     if !(0.0..=1e7).contains(&n) {
                         return Err(Error::Format("PLY: bad list length".into()));
                     }
-                    let mut idx = Vec::with_capacity(n as usize);
+                    let mut idx = Vec::with_capacity((n as usize).min(body.len()));
                     for _ in 0..n as usize {
                         idx.push(r.read(p.ty)?);
                     }
