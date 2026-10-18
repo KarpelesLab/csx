@@ -251,9 +251,10 @@ pub(super) fn structure(el: &Element) -> Result<ContinuousStructure> {
     Ok(s)
 }
 
-/// Parameter entries (format not documented; tolerant reading):
-/// `<Parameter Type="Const" name=".." value=".." Sweep="1"/>` and
-/// `<Parameter Type="Linear" ... Start=".." Stop=".." Step=".."/>`.
+/// Parameter entries, as written by CSXCAD:
+/// `<Parameter Type="Const" name=".." Sweep="1" value=".."/>` and
+/// `<Parameter Type="Linear" ... min=".." max=".." step=".."/>`
+/// (`Start`/`Stop`/`Step` are accepted too).
 fn parameters(el: &Element) -> Result<ParameterSet> {
     let mut ps = ParameterSet::new();
     for p in el.elements() {
@@ -273,9 +274,9 @@ fn parameters(el: &Element) -> Result<ParameterSet> {
                 a.get_any(names).map_or(Ok(0.0), |v| number(v, names[0]))
             };
             param.kind = ParameterKind::Linear {
-                start: f(&["Start", "min", "Min"])?,
-                stop: f(&["Stop", "max", "Max"])?,
-                step: f(&["Step", "step"])?,
+                start: f(&["min", "Min", "Start"])?,
+                stop: f(&["max", "Max", "Stop"])?,
+                step: f(&["step", "Step"])?,
             };
         }
         ps.insert(param);
@@ -331,13 +332,28 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
         }
         "DiscMaterial" => {
             let material = material(el, &a)?;
-            let file = a.get("File").unwrap_or("").to_owned();
-            let scale = a.scalar("Scale").unwrap_or(Scalar::new(1.0));
+            // CSXCAD stores the data file in a `<DiscFile Type File
+            // UseDBBackground Scale/>` child; attributes on the property
+            // itself are accepted as well.
+            let mut file = a.get("File").unwrap_or("").to_owned();
+            let mut scale = a.scalar("Scale").unwrap_or(Scalar::new(1.0));
+            let mut attributes = Vec::new();
+            if let Some(f) = el.child("DiscFile") {
+                for (k, v) in &f.attrs {
+                    match k.as_str() {
+                        "File" => file = v.clone(),
+                        "Scale" => scale = scalar(v),
+                        // Default file type, written back implicitly.
+                        "Type" if v.trim() == "0" => {}
+                        _ => attributes.push((k.clone(), v.clone())),
+                    }
+                }
+            }
             PropertyKind::DiscMaterial(DiscMaterial {
                 material,
                 file,
                 scale,
-                attributes: Vec::new(),
+                attributes,
             })
         }
         "Metal" => PropertyKind::Metal,
@@ -439,9 +455,8 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
         }
     }
     let specific: &[&str] = match el.name.as_str() {
-        "Material" | "LorentzMaterial" | "DebyeMaterial" | "DiscMaterial" => {
-            &["Property", "Weight"]
-        }
+        "Material" | "LorentzMaterial" | "DebyeMaterial" => &["Property", "Weight"],
+        "DiscMaterial" => &["Property", "Weight", "DiscFile"],
         "Excitation" => &["Weight"],
         "ProbeBox" | "DumpBox" => &["FD_Samples"],
         _ => &[],
@@ -449,11 +464,7 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
     let mut known = vec!["FillColor", "EdgeColor", "Attributes", "Primitives"];
     known.extend_from_slice(specific);
     p.extra_elements = unknown_children(el, &known);
-    let rest = a.rest();
-    match &mut p.kind {
-        PropertyKind::DiscMaterial(d) => d.attributes = rest,
-        _ => p.extra_attributes = rest,
-    }
+    p.extra_attributes = a.rest();
     Ok(p)
 }
 
@@ -688,6 +699,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
             stop: child_point(el, "P2")?,
         }),
         "MultiBox" => {
+            a.get("QtyBox");
             let starts: Vec<_> = el.children_named("StartP").map(point).collect();
             let ends: Vec<_> = el.children_named("EndP").map(point).collect();
             if starts.len() != ends.len() {

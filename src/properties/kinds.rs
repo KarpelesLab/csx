@@ -274,7 +274,8 @@ pub struct DiscMaterial {
     pub file: String,
     /// Scale factor applied to the voxel grid coordinates.
     pub scale: Scalar,
-    /// Remaining attributes, preserved verbatim.
+    /// Remaining attributes of the `<DiscFile>` element (`Type`,
+    /// `UseDBBackground`, ...), preserved verbatim.
     pub attributes: Vec<(String, String)>,
 }
 

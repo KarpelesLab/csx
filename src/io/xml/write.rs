@@ -99,12 +99,12 @@ fn parameters(ps: &ParameterSet) -> Element {
             ParameterKind::Linear { .. } => e.set_attr("Type", "Linear"),
         }
         e.set_attr("name", p.name.clone());
-        e.set_attr("value", format_f64(p.value));
         e.set_attr("Sweep", b(p.sweep));
+        e.set_attr("value", format_f64(p.value));
         if let ParameterKind::Linear { start, stop, step } = p.kind {
-            e.set_attr("Start", format_f64(start));
-            e.set_attr("Stop", format_f64(stop));
-            e.set_attr("Step", format_f64(step));
+            e.set_attr("min", format_f64(start));
+            e.set_attr("max", format_f64(stop));
+            e.set_attr("step", format_f64(step));
         }
         el.push(e);
     }
@@ -124,10 +124,9 @@ fn property(p: &Property, index: usize) -> Element {
     if !p.visible {
         el.set_attr("Visible", "0");
     }
-    let mut children = vec![
-        color("FillColor", p.fill_color),
-        color("EdgeColor", p.edge_color),
-    ];
+    // CSXCAD order: colours, attributes, primitives, then kind specific
+    // children (`Property`, `Weight`, `FD_Samples`, `DiscFile`, ...).
+    let mut children = Vec::new();
 
     match &p.kind {
         PropertyKind::Unknown { property, element } => {
@@ -173,9 +172,13 @@ fn property(p: &Property, index: usize) -> Element {
         }
         PropertyKind::DiscMaterial(d) => {
             material(&mut el, &mut children, &d.material, &[]);
-            el.set_attr("File", d.file.clone());
-            el.set_attr("Scale", d.scale.to_text());
-            extend(&mut el, &d.attributes);
+            let mut f = Element::new("DiscFile");
+            let ty = d.attributes.iter().find(|(k, _)| k == "Type");
+            f.set_attr("Type", ty.map_or("0", |(_, v)| v.as_str()));
+            f.set_attr("File", d.file.clone());
+            f.set_attr("Scale", d.scale.to_text());
+            extend(&mut f, &d.attributes);
+            children.push(f);
         }
         PropertyKind::Metal => {}
         PropertyKind::ConductingSheet(c) => {
@@ -214,9 +217,12 @@ fn property(p: &Property, index: usize) -> Element {
         PropertyKind::LumpedElement(l) => {
             el.set_attr("Direction", l.direction.index().to_string());
             el.set_attr("Caps", b(l.caps));
-            el.set_attr("R", l.r.to_text());
-            el.set_attr("C", l.c.to_text());
-            el.set_attr("L", l.l.to_text());
+            // Unset values (NaN) are omitted, as CSXCAD does.
+            for (name, v) in [("R", &l.r), ("C", &l.c), ("L", &l.l)] {
+                if v.is_expr() || !v.value().is_nan() {
+                    el.set_attr(name, v.to_text());
+                }
+            }
             if let Some(t) = l.le_type {
                 el.set_attr("LEtype", t.id().to_string());
             }
@@ -229,19 +235,23 @@ fn property(p: &Property, index: usize) -> Element {
     }
     extend(&mut el, &p.extra_attributes);
 
+    el.push(color("FillColor", p.fill_color));
+    el.push(color("EdgeColor", p.edge_color));
     if !p.attributes.is_empty() {
         let mut a = Element::new("Attributes");
         a.attrs = p.attributes.clone();
-        children.push(a);
+        el.push(a);
     }
     let mut prims = Element::new("Primitives");
     for q in &p.primitives {
         prims.push(primitive(q));
     }
-    children.push(prims);
-    children.extend(p.extra_elements.iter().cloned());
+    el.push(prims);
     for c in children {
         el.push(c);
+    }
+    for c in &p.extra_elements {
+        el.push(c.clone());
     }
     el
 }
@@ -313,6 +323,7 @@ fn primitive(p: &Primitive) -> Element {
             el.push(point("P2", &s.stop));
         }
         Shape::MultiBox(s) => {
+            el.set_attr("QtyBox", s.boxes.len().to_string());
             for (a, c) in &s.boxes {
                 el.push(point("StartP", a));
                 el.push(point("EndP", c));

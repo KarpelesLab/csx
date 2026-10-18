@@ -14,23 +14,33 @@
 //!
 //! # Format notes
 //!
-//! Most of the format is confirmed by published documentation and files.
-//! The following parts are not documented and use a best guess; the reader
-//! accepts several spellings:
+//! The format was verified black-box against files written and read by
+//! CSXCAD 0.7 itself (via its documented Python API):
 //!
-//! * `<ParameterSet>` entries: `<Parameter Type="Const|Linear" name=".."
-//!   value=".." Sweep="1" [Start Stop Step]/>`.
-//! * `<RotPoly>`: `RotAxisDir` attribute and `<Angles Start=".." Stop=".."/>`
-//!   (radians); `StartAngle`/`StopAngle` attributes are also read.
-//! * `<Polyhedron>`: `<Vertex>x,y,z</Vertex>` (also `<Vertex X Y Z/>` on
-//!   read) and `<Face>i,j,k</Face>`.
-//! * `<UserDefined>`: `<Equation>` text and `<CoordShift X Y Z/>` origin.
-//! * `<Point>`: `X`, `Y`, `Z` attributes on the element.
-//! * Dispersive materials: pole `n` (1-based) is written with a `_n` suffix
-//!   (`EpsilonDelta_1`, `EpsilonPlasmaFrequency_1`, ...); a name without
-//!   suffix is read as the first pole.
-//! * `<AbsorbingBC>`: `NormalSignPositive`, `PhaseVelocity`,
-//!   `AbsorbingBoundaryType`; `<DiscMaterial>`: `File`, `Scale`.
+//! * Properties: `FillColor`, `EdgeColor`, `Attributes`, `Primitives`, then
+//!   kind specific children (`Property`/`Weight` for materials, `Weight` for
+//!   excitations, `FD_Samples` for probes, `DiscFile` for discrete
+//!   materials).
+//! * `<ParameterSet>` entries: `<Parameter Type="Const" name=".." Sweep="1"
+//!   value=".."/>` and `Type="Linear"` with `min`, `max`, `step`.
+//! * Transformations: `Translate`, `Rotate_X/Y/Z` (radians),
+//!   `Rotate_Origin Argument="ax,ay,az,angle"`, `Scale` (one value),
+//!   `Scale3` (three values), `Matrix` (16 row-major values acting on column
+//!   vectors, translation in the last column).
+//! * `<RotPoly>`: `NormDir`, `Elevation`, `RotAxisDir`, `<Vertex X1 X2/>` and
+//!   `<Angles Start=".." Stop=".."/>` in radians.
+//! * `<Polyhedron>`: `<Vertex>x,y,z</Vertex>` and `<Face>i,j,k</Face>`.
+//! * `<MultiBox QtyBox="n">` with `<StartP/>`/`<EndP/>` pairs; `<Point X Y Z/>`.
+//! * Dispersive materials: pole `n` (1-based) uses a `_n` suffix in both
+//!   `Property` and `Weight` (`EpsilonPlasmaFrequency_1`,
+//!   `MueLorPoleFrequency_2`, `EpsilonDelta_1`, `EpsilonRelaxTime_1`, ...);
+//!   a name without suffix is read as the first pole.
+//! * `<AbsorbingBC NormalSignPositive PhaseVelocity AbsorbingBoundaryType>`;
+//!   `<DiscMaterial>` with `<DiscFile Type File UseDBBackground Scale/>`.
+//! * Unset lumped element values are omitted.
+//!
+//! `<UserDefined>` is not understood by CSXCAD 0.7; this crate writes it
+//! with an `<Equation>` text and a `<CoordShift X Y Z/>` origin.
 //!
 //! Property elements with an unknown name are read as
 //! [`PropertyKind::Unknown`](crate::PropertyKind::Unknown) remembering the

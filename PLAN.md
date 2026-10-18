@@ -106,18 +106,26 @@ Beyond the original plan:
 
 ### Compatibility notes
 
-Facts confirmed from public documentation / published XML output that shaped
-the implementation:
+Facts confirmed from public documentation, published XML output and
+black-box runs of CSXCAD 0.7 (its Python API, never its source):
 
-* Only `Box` (and `MultiBox`) interpret their coordinates in the primitive's
-  coordinate system (cylindrical boxes are annular sectors); all other
-  primitives are always Cartesian.
-* Transformations are applied in list order; rotation angles are radians in
-  files.
-* Polygon vertices `(X1, X2)` map to axes `(n+1)%3, (n+2)%3` for normal `n`.
-* Material values are written as one or three comma separated values; with
-  `Isotropy="1"` only the first is used. Debye terms use 1-based `_n`
-  suffixes.
+* Coordinate systems: a `Box` in cylindrical coordinates is an annular
+  sector; spheres, cylinders, their shells, curves, wires and points convert
+  their defining points from `(ρ, α, z)`; multi-boxes, polygons, extruded and
+  revolved polygons and polyhedra are always Cartesian. Primitives without
+  `CoordSystem` inherit the structure's; structure queries take coordinates
+  in the structure's system.
+* Curves and points never contain a point.
+* Equal priorities: the earlier property wins.
+* Transformations are applied in list order; angles are radians in files;
+  `Matrix` is row-major acting on column vectors (translation in the last
+  column); vector scaling is written `Scale3`.
+* Polygon vertices `(X1, X2)` map to axes `(n+1)%3, (n+2)%3` for normal `n`;
+  revolved polygons rotate right-handed about `RotAxisDir` starting at the
+  remaining (radial) axis.
+* Material values are written as three comma separated values; with
+  `Isotropy="1"` only the first is used. Dispersive terms use 1-based `_n`
+  suffixes in `Property` and `Weight`.
 * Weighting function variables: `x y z rho a r t`, in drawing units.
 * Expressions: any non-zero value is true.
 
@@ -134,6 +142,6 @@ the implementation:
    round-trip (attributes are preserved).
 5. `MAX_DEPTH` still bounds nested parentheses / unary chains; iterative
    evaluation would remove the limit.
-6. Unconfirmed file-format guesses (Matrix convention, RotPoly, Polyhedron,
-   ParameterSet, UserDefined attribute names) need verification against
-   genuine CSXCAD output.
+6. ~~Unconfirmed file-format guesses~~ — verified against CSXCAD 0.7 (see
+   compatibility notes). `UserDefined` is not supported by CSXCAD 0.7 and
+   keeps this crate's own format.

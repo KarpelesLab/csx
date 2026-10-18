@@ -544,3 +544,162 @@ fn grid_and_background_extra_attributes_survive() {
     let r = ContinuousStructure::from_xml_str(&out).unwrap();
     assert_eq!(r, s);
 }
+
+/// Hand-written fixture in the layout CSXCAD 0.7 itself writes (verified
+/// black-box with its Python API).
+const CSXCAD_LAYOUT: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<ContinuousStructure CoordSystem="0">
+    <RectilinearGrid DeltaUnit="0.001" CoordSystem="0">
+        <XLines Qty="2">0,1</XLines>
+        <YLines Qty="2">0,1</YLines>
+        <ZLines Qty="2">0,1</ZLines>
+    </RectilinearGrid>
+    <BackgroundMaterial Epsilon="1" Mue="1" Kappa="0" Sigma="0" />
+    <ParameterSet>
+        <Parameter Type="Const" name="w" Sweep="1" value="2" />
+        <Parameter Type="Linear" name="h" Sweep="1" value="1" min="0" max="2" step="0.5" />
+    </ParameterSet>
+    <Properties>
+        <Metal ID="0" Name="m">
+            <FillColor R="1" G="2" B="3" a="255" />
+            <EdgeColor R="1" G="2" B="3" a="255" />
+            <Primitives>
+                <Box Priority="0">
+                    <Transformation>
+                        <Scale3 Argument="1,2,3" />
+                        <Translate Argument="5,6,7" />
+                        <Scale Argument="2" />
+                    </Transformation>
+                    <P1 X="0.000000e+00" Y="0.000000e+00" Z="0.000000e+00" />
+                    <P2 X="1.000000e+00" Y="1.000000e+00" Z="1.000000e+00" />
+                </Box>
+                <Box Priority="0">
+                    <Transformation>
+                        <Matrix Argument="0,-1,0,10,1,0,0,20,0,0,1,30,0,0,0,1" />
+                    </Transformation>
+                    <P1 X="1" Y="0" Z="0" />
+                    <P2 X="2" Y="0.5" Z="0.5" />
+                </Box>
+                <MultiBox Priority="0" QtyBox="1">
+                    <StartP X="0" Y="0" Z="0" />
+                    <EndP X="1" Y="1" Z="1" />
+                </MultiBox>
+            </Primitives>
+        </Metal>
+        <LorentzMaterial ID="1" Name="lor" Isotropy="1">
+            <FillColor R="1" G="2" B="3" a="123" />
+            <EdgeColor R="1" G="2" B="3" a="123" />
+            <Primitives />
+            <Property Epsilon="2,1,1" Mue="1,1,1" Kappa="0,0,0" Sigma="0,0,0" Density="0" EpsilonPlasmaFrequency_1="1e9,2e9,3e9" MuePlasmaFrequency_1="0,0,0" EpsilonLorPoleFrequency_1="4e9,0,0" MueLorPoleFrequency_1="0,0,0" EpsilonRelaxTime_1="1e-9,0,0" MueRelaxTime_1="0,0,0" EpsilonPlasmaFrequency_2="5e9,0,0" MuePlasmaFrequency_2="0,0,0" EpsilonLorPoleFrequency_2="0,0,0" MueLorPoleFrequency_2="0,0,0" EpsilonRelaxTime_2="0,0,0" MueRelaxTime_2="0,0,0" />
+            <Weight Epsilon="1,1,1" Mue="1,1,1" Kappa="1,1,1" Sigma="1,1,1" Density="1" EpsilonPlasmaFrequency_1="x,1,1" MuePlasmaFrequency_1="1,1,1" EpsilonLorPoleFrequency_1="1,1,1" MueLorPoleFrequency_1="1,1,1" EpsilonRelaxTime_1="1,1,1" MueRelaxTime_1="1,1,1" EpsilonPlasmaFrequency_2="1,1,1" MuePlasmaFrequency_2="1,1,1" EpsilonLorPoleFrequency_2="1,1,1" MueLorPoleFrequency_2="1,1,1" EpsilonRelaxTime_2="y,1,1" MueRelaxTime_2="1,1,1" />
+        </LorentzMaterial>
+        <DiscMaterial ID="2" Name="disc" Isotropy="1">
+            <FillColor R="1" G="2" B="3" a="123" />
+            <EdgeColor R="1" G="2" B="3" a="123" />
+            <Primitives />
+            <Property Epsilon="1,1,1" Mue="1,1,1" Kappa="0,0,0" Sigma="0,0,0" Density="0" />
+            <Weight Epsilon="1,1,1" Mue="1,1,1" Kappa="1,1,1" Sigma="1,1,1" Density="1" />
+            <DiscFile Type="0" File="mat.h5" UseDBBackground="0" Scale="0.001" />
+        </DiscMaterial>
+        <LumpedElement ID="3" Name="le" Direction="2" Caps="1" R="5.000000e+01" C="1.000000e-12" LEtype="0.000000e+00">
+            <FillColor R="1" G="2" B="3" a="255" />
+            <EdgeColor R="1" G="2" B="3" a="255" />
+            <Primitives />
+        </LumpedElement>
+    </Properties>
+</ContinuousStructure>
+"#;
+
+/// Index of `needle` in `hay` at or after `from`.
+fn find_from(hay: &str, from: usize, needle: &str) -> usize {
+    from + hay[from..]
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle} missing"))
+}
+
+#[test]
+fn csxcad_layout() {
+    use crate::param::ParameterKind;
+    let s = ContinuousStructure::from_xml_str(CSXCAD_LAYOUT).unwrap();
+    let h = s.parameters.parameter("h").unwrap();
+    assert_eq!(
+        h.kind,
+        ParameterKind::Linear {
+            start: 0.0,
+            stop: 2.0,
+            step: 0.5
+        }
+    );
+    assert_eq!(s.parameters.get("w"), Some(2.0));
+
+    let m = &s.properties()[0];
+    // Scale3(1,2,3), Translate(5,6,7), Scale(2) in list order.
+    let t = &m.primitives[0].transform;
+    assert_eq!(t.ops()[0].name(), "Scale3");
+    assert_eq!(
+        t.apply(Vec3::new(1.0, 1.0, 1.0)),
+        Vec3::new(12.0, 16.0, 20.0)
+    );
+    // Matrix: row-major, acting on column vectors.
+    let q = m.primitives[1].transform.apply(Vec3::new(1.0, 0.0, 0.0));
+    assert!((q - Vec3::new(10.0, 21.0, 30.0)).norm() < 1e-12);
+    assert!(
+        s.property_at(
+            Vec3::new(9.75, 21.5, 30.25),
+            CoordSystem::Cartesian,
+            TypeMask::ANY
+        )
+        .is_some()
+    );
+    assert!(
+        m.primitives[2].extra_attributes.is_empty(),
+        "QtyBox consumed"
+    );
+
+    let PropertyKind::LorentzMaterial(l) = &s.properties()[1].kind else {
+        panic!("lorentz expected")
+    };
+    assert_eq!(l.poles.len(), 2);
+    assert_eq!(l.poles[0].eps_plasma_frequency.base(2), 3e9);
+    assert_eq!(l.poles[0].eps_lorentz_pole_frequency.base(0), 4e9);
+    assert_eq!(l.poles[0].eps_plasma_frequency.weight[0].source(), "x");
+    assert_eq!(l.poles[1].eps_relax_time.weight[0].source(), "y");
+    assert_eq!(l.poles[1].eps_plasma_frequency.base(0), 5e9);
+
+    let PropertyKind::DiscMaterial(d) = &s.properties()[2].kind else {
+        panic!("disc expected")
+    };
+    assert_eq!(d.file, "mat.h5");
+    assert_eq!(d.scale.value(), 0.001);
+    assert!(s.properties()[2].extra_attributes.is_empty());
+
+    let PropertyKind::LumpedElement(le) = &s.properties()[3].kind else {
+        panic!("lumped expected")
+    };
+    assert!(le.l.value().is_nan());
+
+    // The writer reproduces the CSXCAD layout.
+    let out = s.to_xml_string();
+    for needle in [
+        r#"<Parameter Type="Linear" name="h" Sweep="1" value="1" min="0" max="2" step="0.5""#,
+        r#"<Scale3 Argument="1,2,3""#,
+        r#"<Matrix Argument="0,-1,0,10,1,0,0,20,0,0,1,30,0,0,0,1""#,
+        r#"<MultiBox Priority="0" QtyBox="1">"#,
+        r#"<DiscFile Type="0" File="mat.h5" Scale="1e-3" UseDBBackground="0""#,
+        "EpsilonRelaxTime_2=\"y,1,1\"",
+    ] {
+        assert!(out.contains(needle), "{needle} missing in\n{out}");
+    }
+    assert!(!out.contains(" L=\""), "unset inductance is omitted");
+    for prop in ["<LorentzMaterial", "<DiscMaterial"] {
+        let start = find_from(&out, 0, prop);
+        let prims = find_from(&out, start, "<Primitives");
+        let attrs = find_from(&out, start, "<Property ");
+        let weight = find_from(&out, start, "<Weight ");
+        assert!(prims < attrs && attrs < weight, "{prop}: child order");
+    }
+    let disc = find_from(&out, 0, "<DiscMaterial");
+    assert!(find_from(&out, disc, "<Weight ") < find_from(&out, disc, "<DiscFile"));
+    let again = ContinuousStructure::from_xml_str(&out).unwrap();
+    assert_eq!(again.to_xml_string(), out);
+}
