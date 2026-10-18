@@ -428,6 +428,26 @@ struct Ctx<'a> {
     snap_tol: f64,
 }
 
+/// Tracks whether all averaged sample pairs are identical.
+#[derive(Default)]
+struct Uniform {
+    first: Option<(f64, f64)>,
+    mixed: bool,
+}
+
+impl Uniform {
+    fn see(&mut self, a: f64, b: f64) {
+        match self.first {
+            None => self.first = Some((a, b)),
+            Some(f) => self.mixed |= f != (a, b),
+        }
+    }
+
+    fn value(&self) -> Option<(f64, f64)> {
+        if self.mixed { None } else { self.first }
+    }
+}
+
 /// Sampled material: `[epsilon, mue, kappa, sigma]` per axis.
 type Sample = [[f64; 3]; 4];
 
@@ -564,6 +584,7 @@ impl Ctx<'_> {
         lo[d] = self.line(d, n[d]);
         hi[d] = self.line(d, n[d] + 1);
         let (mut eps, mut kap, mut wsum) = (0.0, 0.0, 0.0);
+        let mut uniform = Uniform::default();
         for s1 in [-1i64, 1] {
             let Some(h1) = self.half(t1, n[t1], s1) else {
                 continue;
@@ -579,11 +600,13 @@ impl Ctx<'_> {
                 wsum += self.integrate(lo, hi, &mut |w, s| {
                     eps += w * s[0][d];
                     kap += w * s[2][d];
+                    uniform.see(s[0][d], s[2][d]);
                 });
             }
         }
         if wsum > 0.0 {
-            return (eps / wsum, kap / wsum);
+            // Identical samples average to themselves exactly.
+            return uniform.value().unwrap_or((eps / wsum, kap / wsum));
         }
         match self.sample(self.edge_mid(d, idx)) {
             Some(s) => (s[0][d], s[2][d]),
@@ -615,6 +638,7 @@ impl Ctx<'_> {
             hi[t] = self.line(t, n[t] + 1);
         }
         let (mut inv_mu, mut sig, mut wsum) = (0.0, 0.0, 0.0);
+        let mut uniform = Uniform::default();
         for s in [-1i64, 1] {
             let Some(h) = self.half(d, n[d], s) else {
                 continue;
@@ -624,10 +648,11 @@ impl Ctx<'_> {
             wsum += self.integrate(lo, hi, &mut |w, smp| {
                 inv_mu += w / smp[1][d];
                 sig += w * smp[3][d];
+                uniform.see(smp[1][d], smp[3][d]);
             });
         }
         if wsum > 0.0 {
-            return (wsum / inv_mu, sig / wsum);
+            return uniform.value().unwrap_or((wsum / inv_mu, sig / wsum));
         }
         match self.sample(self.face_center(d, idx)) {
             Some(s) => (s[1][d], s[3][d]),
@@ -1019,6 +1044,31 @@ mod tests {
         }
         assert_eq!(g.pec_count(), 0);
         assert!(g.warnings.is_empty(), "{:?}", g.warnings);
+    }
+
+    #[test]
+    fn uniform_values_are_exact() {
+        // Regression: weighted averaging of identical samples returned
+        // e.g. 3.380000000000001.
+        let mut s = ContinuousStructure::new();
+        let l = [0.0, 0.1, 0.35, 1.0, 1.7];
+        grid(&mut s, [&l, &l, &l]);
+        let id = s.add_property(Property::material("d", Material::new(3.38, 0.0021)));
+        s.add_primitive(id, BoxShape::new([-1.0, -1.0, -1.0], [5.0, 5.0, 5.0]))
+            .unwrap();
+        let opts = DiscretizeOptions {
+            subsampling: 3,
+            ..Default::default()
+        };
+        let g = discretize(&s, &opts).unwrap();
+        for d in 0..3 {
+            for idx in 0..g.len() {
+                if g.edge_exists(d, g.node(idx)) {
+                    assert_eq!(g.epsilon[d][idx], 3.38);
+                    assert_eq!(g.kappa[d][idx], 0.0021);
+                }
+            }
+        }
     }
 
     #[test]
