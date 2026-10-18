@@ -177,8 +177,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.grid.num_cells(),
         s.grid.delta_unit
     );
-    if let Some(f) = back.fdtd_settings() {
-        println!("excitation: {:?}", f?.excitation);
+    if let Some(f) = back.fdtd_settings()? {
+        println!("excitation: {:?}", f.excitation);
     }
     for p in s.properties() {
         println!("{:>14}  {}", p.kind.type_name(), p.name);

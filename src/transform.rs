@@ -250,7 +250,7 @@ impl Transform {
         self.matrix = self
             .ops
             .iter()
-            .fold(Mat4::IDENTITY, |acc, op| op.matrix(self.degrees).mul(&acc));
+            .fold(Mat4::IDENTITY, |acc, op| op.matrix(self.degrees) * acc);
         match self.matrix.inverse() {
             Some(inv) => {
                 self.inverse = inv;

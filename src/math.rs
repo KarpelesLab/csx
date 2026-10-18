@@ -185,6 +185,14 @@ impl Neg for Vec3 {
     }
 }
 
+impl Mul<Vec3> for f64 {
+    type Output = Vec3;
+    #[inline]
+    fn mul(self, v: Vec3) -> Vec3 {
+        v * self
+    }
+}
+
 /// A 4×4 matrix in row-major order, used for affine transformations of
 /// homogeneous coordinates (`p' = M · [p, 1]`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -253,18 +261,6 @@ impl Mat4 {
             [t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ])
-    }
-
-    /// Matrix product `self · o` (applies `o` first, then `self`).
-    #[must_use]
-    pub fn mul(&self, o: &Mat4) -> Mat4 {
-        let mut r = [[0.0; 4]; 4];
-        for (i, row) in r.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate() {
-                *cell = (0..4).map(|k| self.0[i][k] * o.0[k][j]).sum();
-            }
-        }
-        Mat4(r)
     }
 
     /// Transposed matrix.
@@ -336,6 +332,20 @@ impl Mat4 {
     /// True if this is (exactly) the identity matrix.
     pub fn is_identity(&self) -> bool {
         *self == Mat4::IDENTITY
+    }
+}
+
+impl Mul for Mat4 {
+    type Output = Mat4;
+    /// Matrix product `self · o` (applies `o` first, then `self`).
+    fn mul(self, o: Mat4) -> Mat4 {
+        let mut r = [[0.0; 4]; 4];
+        for (i, row) in r.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = (0..4).map(|k| self.0[i][k] * o.0[k][j]).sum();
+            }
+        }
+        Mat4(r)
     }
 }
 
@@ -497,8 +507,8 @@ mod tests {
         let r = Mat4::rotation(Vec3::unit(2), core::f64::consts::FRAC_PI_2);
         assert!(close(r.transform_point(Vec3::unit(0)), Vec3::unit(1)));
         let m = Mat4::translation(Vec3::new(1.0, 2.0, 3.0))
-            .mul(&r)
-            .mul(&Mat4::scaling(Vec3::new(2.0, 3.0, 4.0)));
+            * r
+            * Mat4::scaling(Vec3::new(2.0, 3.0, 4.0));
         let inv = m.inverse().unwrap();
         let p = Vec3::new(0.3, -1.2, 7.0);
         assert!(close(inv.transform_point(m.transform_point(p)), p));

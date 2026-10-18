@@ -98,6 +98,8 @@ pub struct TypeMask(pub u32);
 impl TypeMask {
     /// Matches every property.
     pub const ANY: TypeMask = TypeMask(u32::MAX);
+    /// Matches no property.
+    pub const NONE: TypeMask = TypeMask(0);
     /// Every kind of material (plain, dispersive, discrete).
     pub const MATERIALS: TypeMask = TypeMask(
         PropertyType::Material as u32
@@ -135,6 +137,25 @@ impl core::ops::BitOr for TypeMask {
     type Output = TypeMask;
     fn bitor(self, o: TypeMask) -> TypeMask {
         TypeMask(self.0 | o.0)
+    }
+}
+
+impl core::ops::BitOr<PropertyType> for TypeMask {
+    type Output = TypeMask;
+    fn bitor(self, o: PropertyType) -> TypeMask {
+        TypeMask(self.0 | o as u32)
+    }
+}
+
+impl core::ops::BitOrAssign for TypeMask {
+    fn bitor_assign(&mut self, o: TypeMask) {
+        self.0 |= o.0;
+    }
+}
+
+impl core::ops::BitOrAssign<PropertyType> for TypeMask {
+    fn bitor_assign(&mut self, o: PropertyType) {
+        self.0 |= o as u32;
     }
 }
 

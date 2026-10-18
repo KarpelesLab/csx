@@ -324,7 +324,7 @@ mod tests {
         );
         // a fresh document without raw FDTD element
         let mut doc = OpenEmsDocument::default();
-        assert!(doc.fdtd_settings().is_none());
+        assert!(doc.fdtd_settings().unwrap().is_none());
         doc.set_fdtd_settings(&FdtdSettings::gaussian(1e9, 5e8));
         let x = doc.to_xml_string();
         assert!(x.contains(r#"xmin="PML_8""#), "{x}");

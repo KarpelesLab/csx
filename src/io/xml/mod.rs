@@ -102,10 +102,13 @@ impl OpenEmsDocument {
         }
     }
 
-    /// Typed view of the `<FDTD>` element; `None` when the document has no
-    /// FDTD settings.
-    pub fn fdtd_settings(&self) -> Option<Result<FdtdSettings>> {
-        self.fdtd.as_ref().map(FdtdSettings::from_xml_element)
+    /// Typed view of the `<FDTD>` element; `Ok(None)` when the document has
+    /// no FDTD settings.
+    pub fn fdtd_settings(&self) -> Result<Option<FdtdSettings>> {
+        self.fdtd
+            .as_ref()
+            .map(FdtdSettings::from_xml_element)
+            .transpose()
     }
 
     /// Replaces the `<FDTD>` element by `settings`. Child elements other

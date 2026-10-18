@@ -38,6 +38,24 @@
 //! # Ok::<(), csx::Error>(())
 //! ```
 //!
+//! ## Module overview
+//!
+//! * [`structure`], [`properties`], [`primitives`]: the model.
+//! * [`param`], [`expr`]: parametric values and expressions.
+//! * [`grid`], [`mesh`]: mesh lines and automatic mesh generation.
+//! * [`discretize`]: sampling the model onto the FDTD grid.
+//! * [`tessellate`], [`io`]: triangle meshes, file import/export and (with
+//!   the `xml` feature) CSXCAD / openEMS XML.
+//! * [`fdtd`]: openEMS simulation settings.
+//! * [`prelude`]: glob-importable common types.
+//!
+//! ## Stability
+//!
+//! Enums and option/result structs that are expected to grow (errors, shape
+//! and property kinds, type ids, `*Options`, ...) are `#[non_exhaustive]`:
+//! match them with a wildcard arm and build options from `Default` plus
+//! their `with_*` builders.
+//!
 //! This is a clean-room implementation written from public documentation and
 //! the observable file format only.
 
@@ -66,5 +84,36 @@ pub use math::{BoundingBox, Mat4, Vec3};
 pub use param::{Parameter, ParameterSet, Scalar, ScalarPoint};
 pub use primitives::{Primitive, Shape};
 pub use properties::{Axis, Material, Property, PropertyKind, PropertyType, TypeMask};
-pub use structure::{ContinuousStructure, PropertyId};
+pub use structure::{BackgroundMaterial, ContinuousStructure, Hit, Medium, PropertyId};
 pub use transform::{Transform, TransformOp};
+
+/// The most commonly used types, for glob import:
+///
+/// ```
+/// use csx::prelude::*;
+///
+/// let mut s = ContinuousStructure::new();
+/// let id = s.add_property(Property::metal("pec"));
+/// s.add_primitive(id, BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]))?;
+/// assert!(s.property_at(Vec3::new(0.5, 0.5, 0.5), CoordSystem::Cartesian, TypeMask::ANY).is_some());
+/// # Ok::<(), csx::Error>(())
+/// ```
+pub mod prelude {
+    pub use crate::fdtd::{Boundary, BoundaryConditions, ExcitationSignal, FdtdSettings};
+    #[cfg(feature = "xml")]
+    pub use crate::io::xml::OpenEmsDocument;
+    pub use crate::mesh::{MeshBuilder, MeshOptions};
+    pub use crate::primitives::{
+        BoxShape, Curve, Cylinder, CylindricalShell, LinPoly, MultiBox, PointShape, Polygon,
+        Polyhedron, PolyhedronReader, RotPoly, Sphere, SphericalShell, UserDefined, Wire,
+    };
+    pub use crate::properties::{
+        ConductingSheet, DebyeMaterial, DumpBox, DumpType, Excitation, ExcitationType,
+        LorentzMaterial, LumpedElement, Material, ProbeBox, ProbeType, Rgba,
+    };
+    pub use crate::{
+        Axis, BoundingBox, ContinuousStructure, CoordSystem, Error, ParameterSet, Primitive,
+        Property, PropertyKind, PropertyType, RectilinearGrid, Result, Scalar, ScalarPoint, Shape,
+        Transform, TypeMask, Vec3,
+    };
+}
