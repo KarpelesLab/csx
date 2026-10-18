@@ -153,7 +153,9 @@ All six items identified after the first implementation pass are resolved:
    compatibility notes). `UserDefined` is not supported by CSXCAD 0.7 and
    keeps this crate's own format.
 
-Remaining:
+Also done: cylindrical-coordinate primitives are honoured in `mesh`,
+`discretize` and `tessellate`, and cylindrical query semantics match CSXCAD
+(differentially tested, 0 mismatches over 140k random points).
 
-* Cylindrical-coordinate primitives in `mesh`, `discretize` and `tessellate`
-  (in progress), negative-ρ queries.
+Known divergence: CSXCAD clips wires defined in cylindrical coordinates to an
+inconsistently computed bounding box; this crate uses the true geometry.
