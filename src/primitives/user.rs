@@ -10,7 +10,7 @@ use crate::param::{ParameterSet, ScalarPoint};
 pub const USER_VARS: [&str; 7] = ["x", "y", "z", "rho", "a", "r", "t"];
 
 /// A primitive whose interior is the set of points where `function`
-/// evaluates to a non-zero value.
+/// evaluates to a non-zero (and non-NaN) value.
 ///
 /// Variables: `x, y, z` (Cartesian, relative to `base`), `rho` and `a`
 /// (cylindrical radius and azimuth), `r` and `t` (spherical radius and polar
@@ -46,7 +46,8 @@ impl UserDefined {
         let q = p - self.base.value();
         let (r, t, a) = cartesian_to_spherical(q);
         let rho = q[0].hypot(q[1]);
-        f.eval(&[q[0], q[1], q[2], rho, a, r, t]) != 0.0
+        let v = f.eval(&[q[0], q[1], q[2], rho, a, r, t]);
+        v != 0.0 && !v.is_nan()
     }
 
     pub(crate) fn bbox(&self) -> BoundingBox {

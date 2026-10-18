@@ -184,6 +184,10 @@ fn color(el: Option<&Element>) -> Result<Rgba> {
 
 fn coord_system(s: &str) -> Option<CoordSystem> {
     let v = parse_number_lenient(s)?;
+    // `as` would map NaN to 0 (Cartesian); only accept exact ids.
+    if v.fract() != 0.0 || !v.is_finite() {
+        return None;
+    }
     CoordSystem::from_id(v as i32)
 }
 
@@ -778,5 +782,8 @@ mod tests {
         assert_eq!(order_of("EpsilonDelta_0", "EpsilonDelta"), None);
         assert!(boolean("1") && !boolean("0") && boolean("true") && !boolean("0.000000e+00"));
         assert_eq!(int("0.000000e+00", "x").unwrap(), 0);
+        assert_eq!(coord_system("nan"), None);
+        assert_eq!(coord_system("1.5"), None);
+        assert_eq!(coord_system("1"), Some(CoordSystem::Cylindrical));
     }
 }

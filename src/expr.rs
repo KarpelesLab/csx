@@ -14,7 +14,7 @@
 //!   jn y0 y1 yn` (`jn(n, x)`, `yn(n, x)` with integer order `n`)
 //! * constants `pi` and `e` (overridable by variables / parameters)
 //!
-//! Booleans are `1` / `0`; any non-zero value is *true*.
+//! Booleans are `1` / `0`; any non-zero value is *true* (NaN is false).
 
 use std::collections::BTreeSet;
 
@@ -185,7 +185,8 @@ impl Func {
 
 #[inline]
 fn truthy(v: f64) -> bool {
-    v != 0.0
+    // NaN (e.g. 0/0) is false, not "non-zero".
+    v != 0.0 && !v.is_nan()
 }
 
 #[inline]
@@ -1178,6 +1179,9 @@ mod tests {
         let long = vec!["1"; 5000].join("+");
         assert_eq!(ev(&long), 5000.0);
         assert_eq!(ev("0 & (1/0) | 2"), 1.0);
+        // NaN is not true
+        assert_eq!(ev("if(0/0, 1, 2)"), 2.0);
+        assert_eq!(ev("!(0/0)"), 1.0);
     }
 
     #[test]

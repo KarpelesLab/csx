@@ -125,10 +125,19 @@ impl ParameterSet {
 ///
 /// The cached [`Scalar::value`] is what geometric queries use; for
 /// expressions it is refreshed by [`Scalar::update`].
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Equality compares the expression and the cached value, treating two NaN
+/// values (unset or not yet evaluated) as equal.
+#[derive(Debug, Clone)]
 pub struct Scalar {
     expr: Option<Box<str>>,
     value: f64,
+}
+
+impl PartialEq for Scalar {
+    fn eq(&self, o: &Scalar) -> bool {
+        self.expr == o.expr && (self.value == o.value || (self.value.is_nan() && o.value.is_nan()))
+    }
 }
 
 impl Default for Scalar {
@@ -296,6 +305,14 @@ mod tests {
         assert_eq!(Scalar::expr("2*3").value(), 6.0);
         assert!(Scalar::expr("q").update(&ps).is_err());
         assert!(Scalar::try_expr("1+").is_err());
+    }
+
+    #[test]
+    fn nan_equality() {
+        assert_eq!(Scalar::new(f64::NAN), Scalar::new(f64::NAN));
+        assert_eq!(Scalar::expr("q*2"), Scalar::expr("q*2"));
+        assert_ne!(Scalar::expr("q*2"), Scalar::new(f64::NAN));
+        assert_ne!(Scalar::new(1.0), Scalar::new(f64::NAN));
     }
 
     #[test]
