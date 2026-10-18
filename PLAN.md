@@ -1,0 +1,82 @@
+# csx — implementation plan
+
+`csx` is a pure-Rust, clean-room implementation of a *continuous structure*
+geometry and material model, compatible with the CSXCAD data model and the
+XML files consumed/produced by CSXCAD and openEMS.
+
+## Ground rules
+
+* **Clean room.** No CSXCAD / openEMS source code is read or copied. Behaviour
+  is derived from public documentation, the published API reference and the
+  observable XML file format (interoperability). Where the documentation is
+  silent, behaviour is chosen deliberately and documented in rustdoc.
+* **License:** MIT.
+* **Toolchain:** edition 2024, MSRV 1.95 (`rust-version = "1.95"`).
+* **Minimum dependencies:** zero runtime dependencies. The XML reader/writer
+  is a small in-tree implementation, gated behind the optional `xml` cargo
+  feature (enabled by default).
+* `#![forbid(unsafe_code)]`, no panics on malformed input (errors instead).
+* Versioning starts at `0.0.0`.
+
+## Architecture (single crate, modules)
+
+| Module | Responsibility |
+|---|---|
+| `math` | `Vec3`, 4×4 affine matrices, `BoundingBox`, numeric helpers |
+| `coords` | `CoordSystem` (Cartesian / Cylindrical), conversions, angle wrapping |
+| `expr` | fparser-compatible expression parser + evaluator (constant folding, variables) |
+| `param` | `ParameterSet`, `Scalar` (constant or expression with cached value) |
+| `transform` | Ordered transformation list (translate, rotate origin/x/y/z, scale, matrix) |
+| `primitives` | Box, MultiBox, Sphere, SphericalShell, Cylinder, CylindricalShell, Polygon, LinPoly, RotPoly, Curve, Wire, Point, Polyhedron, PolyhedronReader, UserDefined |
+| `properties` | Material, Lorentz/Debye dispersive materials, DiscMaterial (metadata), Metal, ConductingSheet, Excitation, ProbeBox, DumpBox, LumpedElement, AbsorbingBC, Unknown |
+| `grid` | `RectilinearGrid`: lines, delta unit, lookup/snap, helpers for line generation/smoothing |
+| `structure` | `ContinuousStructure`: owns properties, grid, parameters, background material; priority-based spatial queries; `update()` re-evaluation |
+| `io::xml` (feature `xml`) | minimal XML DOM parser + writer; CSXCAD/openEMS reader & writer with round-trip of unknown attributes |
+| `io::stl`, `io::ply` | STL (ascii/binary) and PLY (ascii/binary LE/BE) mesh readers for polyhedra |
+
+### Key design decisions
+
+* **Data model.** Properties own their primitives. Spatial queries return
+  `(&Property, &Primitive)` pairs. Properties and primitives carry stable ids.
+* **Values.** Every user-facing number that CSXCAD allows to be an expression
+  is a `Scalar` = `{ expr: Option<String>, value: f64 }`. `structure.update()`
+  re-evaluates all expressions against the `ParameterSet` (like CSXCAD's
+  update step); hot paths only read the cached `f64`.
+* **Coordinates.** All queries take a point *and* the coordinate system it is
+  expressed in. Primitives may be defined in either system; a cylindrical
+  Box is an annular sector (ρ, α, z ranges).
+* **Inside test.** `point → (convert CS) → inverse transform → local test`.
+  Polyhedra use a generalised winding number (robust for closed meshes) with
+  bounding-box rejection; a BVH can be added later.
+* **Priority.** `structure.property_at(point, cs, filter)` returns the
+  property whose containing primitive has highest priority (ties: last
+  inserted wins, documented).
+* **Material evaluation.** `Material::epsilon_at(point)` etc. apply the
+  weighting expressions (variables x, y, z, rho, r, a, t) per direction.
+* **Round-trip.** Unknown XML attributes/elements are preserved in
+  `extra` maps so read→write does not lose information.
+
+## Milestones
+
+1. **Scaffold** — Cargo.toml (0.0.0, MSRV, features), LICENSE, README, CI
+   (fmt, clippy, test on stable + 1.95, `--no-default-features`).
+2. **Core math & coordinates** — Vec3, Mat4, BoundingBox, cylindrical
+   conversions, tests.
+3. **Expressions & parameters** — tokenizer, Pratt parser, AST, evaluator,
+   fparser function set, `ParameterSet`, `Scalar`; property tests.
+4. **Transformations** — op list, composition, inverse, (de)serialisable
+   argument form.
+5. **Primitives** — all types: `is_inside`, `bounding_box`, `dimension`,
+   update; extensive tests per primitive (incl. cylindrical CS, transforms).
+6. **Properties** — all types, colours, visibility, attributes, material
+   weighting, dispersive parameters.
+7. **ContinuousStructure** — container API, ids, lookup by name/type,
+   priority queries, background material, bounding box of the whole model.
+8. **Rectilinear grid** — lines management, lookup, snapping, simple
+   smooth-mesh generation helpers.
+9. **XML I/O** (feature `xml`) — minimal XML parser/writer, CSXCAD reader
+   and writer, openEMS document wrapper (FDTD section kept typed-or-raw),
+   round-trip tests with hand-written fixtures.
+10. **Mesh file readers** — STL/PLY for `PolyhedronReader`.
+11. **Polish** — docs, examples, benches, fuzz-style robustness tests,
+    performance (BVH for polyhedra, per-property bbox culling).

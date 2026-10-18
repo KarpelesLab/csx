@@ -1,0 +1,22 @@
+[package]
+name = "csx"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Pure Rust continuous-structure geometry and material modeling, compatible with CSXCAD and openEMS"
+repository = "https://github.com/KarpelesLab/csx"
+readme = "README.md"
+keywords = ["csxcad", "openems", "geometry", "fdtd", "electromagnetics"]
+categories = ["science", "simulation", "mathematics"]
+
+[features]
+default = ["xml"]
+## CSXCAD / openEMS XML reader and writer (in-tree, no external dependencies).
+xml = []
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
