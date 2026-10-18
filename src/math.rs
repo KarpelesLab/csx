@@ -367,7 +367,7 @@ impl BoundingBox {
 
     /// True if the box contains no point.
     pub fn is_empty(&self) -> bool {
-        (0..3).any(|i| !(self.min[i] <= self.max[i]))
+        (0..3).any(|i| self.min[i].partial_cmp(&self.max[i]).is_none_or(|o| o.is_gt()))
     }
 
     /// Grows the box to contain `p`.
