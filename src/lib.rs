@@ -52,6 +52,7 @@ pub mod param;
 pub mod primitives;
 pub mod properties;
 pub mod structure;
+pub mod tessellate;
 pub mod transform;
 
 pub use coords::CoordSystem;

@@ -1,5 +1,6 @@
 //! File formats.
 
+pub mod export;
 pub mod ply;
 pub mod stl;
 #[cfg(feature = "xml")]
