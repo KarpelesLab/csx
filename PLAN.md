@@ -131,17 +131,23 @@ black-box runs of CSXCAD 0.7 (its Python API, never its source):
 
 ## Open items before 1.0
 
-1. Polygon vertices are plain `f64`; parametric vertices are evaluated on read
-   and lost on write. Consider `Vec<[Scalar; 2]>`.
-2. Public fields that can go stale (`UserDefined::function`, cached
-   `PolyhedronReader::mesh`, ...): make private with setters, or keep
-   `update()` as the documented contract everywhere.
-3. Raw `i32` type ids (excitation/probe/dump types, lumped direction) →
-   enums with an `Other(i32)` fallback.
-4. Unknown child elements of properties/primitives are dropped on XML
-   round-trip (attributes are preserved).
-5. `MAX_DEPTH` still bounds nested parentheses / unary chains; iterative
-   evaluation would remove the limit.
-6. ~~Unconfirmed file-format guesses~~ — verified against CSXCAD 0.7 (see
+All six items identified after the first implementation pass are resolved:
+
+1. ✅ Polygon vertices are parametric (`PolyVertices`, cached evaluation).
+2. ✅ Stale-prone caches are private behind invalidating setters
+   (`UserDefined`, `PolyhedronReader`); the `update()` contract is documented
+   on `ContinuousStructure`.
+3. ✅ Type ids are enums with `Other(i32)` fallbacks (`ExcitationType`,
+   `ProbeType`, `DumpType`, `DumpMode`, `DumpFileType`, `LumpedElementType`,
+   `AbcType`, `TimeStepMethod`, `Axis`).
+4. ✅ Unknown child elements and attributes survive XML round-trips
+   (structure, properties, primitives, grid, background material).
+5. ✅ Expressions compile to iterative bytecode; no nesting limit.
+6. ✅ File-format guesses verified black-box against CSXCAD 0.7 (see
    compatibility notes). `UserDefined` is not supported by CSXCAD 0.7 and
    keeps this crate's own format.
+
+Remaining:
+
+* Cylindrical-coordinate primitives in `mesh`, `discretize` and `tessellate`
+  (in progress), negative-ρ queries.
