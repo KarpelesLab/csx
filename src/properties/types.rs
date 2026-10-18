@@ -20,6 +20,7 @@ macro_rules! id_enum {
     ) => {
         $(#[$m])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
         pub enum $name {
             $( $(#[$vm])* $v, )*
             /// An id without a named variant, preserved verbatim.

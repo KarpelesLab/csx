@@ -62,6 +62,7 @@ impl BackgroundMaterial {
 pub struct PropertyId(pub u32);
 
 /// The result of a priority query: a property and the winning primitive.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct Hit<'a> {
     /// The property.
@@ -397,6 +398,16 @@ pub struct SpatialIndex<'a> {
     bvh: Bvh,
     cs: CoordSystem,
     default_cs: CoordSystem,
+}
+
+impl core::fmt::Debug for SpatialIndex<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SpatialIndex")
+            .field("primitives", &self.entries.len())
+            .field("cs", &self.cs)
+            .field("default_cs", &self.default_cs)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> SpatialIndex<'a> {

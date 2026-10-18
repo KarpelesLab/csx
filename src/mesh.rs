@@ -25,6 +25,7 @@ use crate::properties::{PropertyType, TypeMask};
 use crate::structure::ContinuousStructure;
 
 /// Options of the automatic mesher.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshOptions {
     /// Largest allowed cell size per axis (drawing units; radians for the

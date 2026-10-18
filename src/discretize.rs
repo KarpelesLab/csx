@@ -58,6 +58,7 @@ use crate::properties::{
 use crate::structure::{ContinuousStructure, SpatialIndex};
 
 /// Options of [`discretize`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscretizeOptions {
     /// Number of sub-samples per axis inside each quarter / half cell
@@ -80,7 +81,28 @@ impl Default for DiscretizeOptions {
     }
 }
 
+impl DiscretizeOptions {
+    /// Builder: sub-samples per axis and quarter / half cell.
+    pub fn with_subsampling(mut self, n: usize) -> Self {
+        self.subsampling = n;
+        self
+    }
+
+    /// Builder: worker threads (0 = available parallelism).
+    pub fn with_threads(mut self, n: usize) -> Self {
+        self.threads = n;
+        self
+    }
+
+    /// Builder: relative snapping tolerance.
+    pub fn with_snap_tolerance(mut self, tol: f64) -> Self {
+        self.snap_tolerance = tol;
+        self
+    }
+}
+
 /// A conducting sheet referenced from [`MaterialGrid::sheet`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetInfo {
     /// Property name.
@@ -101,6 +123,7 @@ pub struct Edge {
 }
 
 /// Excitation amplitudes of one excitation property.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExcitationField {
     /// Property name.
@@ -118,6 +141,7 @@ pub struct ExcitationField {
 /// One edge of a lumped element. The element's values are distributed over
 /// its edges: with `s` edges in series (along the element direction) and `p`
 /// in parallel, each edge gets `R·p/s`, `L·p/s` and `C·s/p`.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct LumpedEdge {
     /// Property name.
@@ -137,6 +161,7 @@ pub struct LumpedEdge {
 }
 
 /// Result of [`discretize`]; see the module docs for the conventions.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialGrid {
     /// Number of mesh lines per axis.
@@ -215,8 +240,9 @@ impl MaterialGrid {
 /// Largest per-axis sub-sampling factor accepted by [`discretize`].
 pub const MAX_SUBSAMPLING: usize = 64;
 
-/// Largest number of grid nodes [`discretize`] accepts.
-pub const MAX_NODES: usize = 1 << 32;
+/// Largest number of grid nodes [`discretize`] accepts
+/// (2³², or `usize::MAX` on 32-bit targets).
+pub const MAX_NODES: usize = (u32::MAX as usize).saturating_add(1);
 
 /// Discretises the materials, metals, sheets, excitations and lumped
 /// elements of `s` onto `s.grid`. The structure should be up to date (see

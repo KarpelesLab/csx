@@ -10,6 +10,7 @@ use crate::math::{Mat4, Vec3};
 use crate::param::{ParameterSet, Scalar};
 
 /// One elementary transformation.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformOp {
     /// Translation by a vector.

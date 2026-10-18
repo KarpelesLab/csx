@@ -18,6 +18,7 @@ use crate::properties::TypeMask;
 use crate::structure::ContinuousStructure;
 
 /// Tessellation resolution.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TessellationOptions {
     /// Number of segments used for a full circle (partial arcs use a
@@ -37,6 +38,18 @@ impl Default for TessellationOptions {
 }
 
 impl TessellationOptions {
+    /// Builder: segments per full circle.
+    pub fn with_segments(mut self, segments: usize) -> Self {
+        self.segments = segments;
+        self
+    }
+
+    /// Builder: latitude bands of spheres.
+    pub fn with_sphere_rings(mut self, rings: usize) -> Self {
+        self.sphere_rings = rings;
+        self
+    }
+
     fn arc_segments(&self, span: f64) -> usize {
         let full = self.segments.max(3) as f64;
         // Arcs beyond a full turn overlap themselves; cap them (also keeps
@@ -621,6 +634,7 @@ pub fn polyline(prim: &Primitive, default_cs: CoordSystem) -> Vec<Vec3> {
 }
 
 /// One tessellated primitive of a structure.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TessellatedPrimitive {
     /// Index of the owning property in [`ContinuousStructure::properties`].

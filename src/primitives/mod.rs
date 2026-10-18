@@ -60,6 +60,7 @@ use crate::param::{ParameterSet, ScalarPoint};
 use crate::transform::Transform;
 
 /// Mesh file formats understood by [`PolyhedronReader`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MeshFileType {
     /// STL (ASCII or binary); file type id `1`.
@@ -206,6 +207,7 @@ impl PolyhedronReader {
 }
 
 /// The geometric definition of a primitive.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
     /// Axis aligned box.

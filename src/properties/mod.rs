@@ -61,6 +61,7 @@ impl Rgba {
 }
 
 /// The kind of a property, as a bit flag (see [`TypeMask`]).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum PropertyType {
@@ -145,6 +146,7 @@ impl core::ops::BitOr for PropertyType {
 }
 
 /// Kind-specific data of a property.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyKind {
     /// Unknown property; `property` holds the free-form type text.

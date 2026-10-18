@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::expr::Expr;
 
 /// The time signal used by all excitations.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExcitationSignal {
     /// Gaussian-modulated sine (type `0`): centre frequency `f0` and 20 dB
@@ -177,6 +178,7 @@ impl SignalFn {
 }
 
 /// Boundary condition of one face of the simulation domain.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Boundary {
     /// Perfect electric conductor (`PEC`, numeric `0`).

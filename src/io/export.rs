@@ -48,6 +48,7 @@ pub fn ply_ascii(mesh: &TriMesh) -> String {
 }
 
 /// Options for [`vtk_ascii`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VtkOptions {
     /// Tessellation resolution.
@@ -66,6 +67,26 @@ impl Default for VtkOptions {
             mask: TypeMask::ANY,
             scale: 1.0,
         }
+    }
+}
+
+impl VtkOptions {
+    /// Builder: tessellation resolution.
+    pub fn with_tessellation(mut self, t: TessellationOptions) -> Self {
+        self.tessellation = t;
+        self
+    }
+
+    /// Builder: which properties to export.
+    pub fn with_mask(mut self, mask: impl Into<TypeMask>) -> Self {
+        self.mask = mask.into();
+        self
+    }
+
+    /// Builder: coordinate scale factor.
+    pub fn with_scale(mut self, scale: f64) -> Self {
+        self.scale = scale;
+        self
     }
 }
 

@@ -3,6 +3,7 @@
 use core::fmt;
 
 /// Errors produced by this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
     /// An expression could not be parsed.
