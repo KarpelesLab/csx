@@ -9,7 +9,7 @@
 use core::fmt;
 
 use crate::error::{Error, Result};
-use crate::expr::{Expr, parse_number};
+use crate::expr::{Expr, parse_number, parse_number_lenient};
 
 /// How a parameter is swept (informational; used by sweep front-ends).
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -147,7 +147,7 @@ impl Scalar {
     /// is computed immediately when the expression does not depend on any
     /// parameter, otherwise it is `NaN` until [`Scalar::update`] is called.
     pub fn expr(src: &str) -> Self {
-        if let Some(v) = parse_number(src) {
+        if let Some(v) = parse_number_lenient(src) {
             return Scalar::new(v);
         }
         let value = Expr::parse(src)
@@ -161,7 +161,7 @@ impl Scalar {
 
     /// Like [`Scalar::expr`] but validates the syntax.
     pub fn try_expr(src: &str) -> Result<Self> {
-        if parse_number(src).is_none() {
+        if parse_number_lenient(src).is_none() {
             Expr::parse(src)?;
         }
         Ok(Scalar::expr(src))
@@ -229,6 +229,12 @@ impl fmt::Display for Scalar {
 
 /// Formats a float with the shortest representation that round-trips.
 pub fn format_f64(v: f64) -> String {
+    if v.is_nan() {
+        return "nan".into();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "inf".into() } else { "-inf".into() };
+    }
     if v == 0.0 {
         return "0".into();
     }

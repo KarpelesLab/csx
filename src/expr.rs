@@ -13,7 +13,7 @@
 //!   sec sin sinh sqrt tan tanh trunc`
 //! * constants `pi` and `e` (overridable by variables / parameters)
 //!
-//! Booleans are `1` / `0`; a value is *true* when `|v| >= 0.5`.
+//! Booleans are `1` / `0`; any non-zero value is *true*.
 
 use std::collections::BTreeSet;
 
@@ -166,7 +166,7 @@ impl Func {
 
 #[inline]
 fn truthy(v: f64) -> bool {
-    v.abs() >= 0.5
+    v != 0.0
 }
 
 #[inline]
@@ -688,6 +688,30 @@ pub fn parse_number(s: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// Like [`parse_number`] but also accepts the textual NaN / infinity forms
+/// written by C and C++ runtimes (`nan`, `-nan(ind)`, `inf`, `1.#QNAN`, ...).
+pub fn parse_number_lenient(s: &str) -> Option<f64> {
+    if let Some(v) = parse_number(s) {
+        return Some(v);
+    }
+    let t = s.trim().to_ascii_lowercase();
+    let (neg, body) = match t.strip_prefix('-') {
+        Some(b) => (true, b),
+        None => (false, t.strip_prefix('+').unwrap_or(&t)),
+    };
+    if body.starts_with("nan") || body.contains("#qnan") || body.contains("#ind") {
+        return Some(f64::NAN);
+    }
+    if body == "inf" || body == "infinity" || body.contains("#inf") {
+        return Some(if neg {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,5 +790,9 @@ mod tests {
         assert_eq!(parse_number(" -1e-3 "), Some(-1e-3));
         assert_eq!(parse_number("a"), None);
         assert_eq!(parse_number("inf"), None);
+        assert!(parse_number_lenient("-nan(ind)").unwrap().is_nan());
+        assert!(parse_number_lenient("nan").unwrap().is_nan());
+        assert_eq!(parse_number_lenient("-inf"), Some(f64::NEG_INFINITY));
+        assert_eq!(parse_number_lenient("x"), None);
     }
 }

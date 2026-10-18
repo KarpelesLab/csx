@@ -123,7 +123,8 @@ fn check_radius(r: &Scalar, what: &str) -> Result<()> {
     }
 }
 
-/// Solid sphere.
+/// Solid sphere. Like all primitives except boxes, its values are always
+/// Cartesian.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Sphere {
     /// Center (in the primitive's coordinate system).
@@ -141,14 +142,14 @@ impl Sphere {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        let c = cs.to_cartesian(self.center.value());
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        let c = self.center.value();
         let r = self.radius.value();
         (p - c).norm() <= r + tol(r, 0.0)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let c = cs.to_cartesian(self.center.value());
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let c = self.center.value();
         BoundingBox::from_corners(c, c).expanded(self.radius.value())
     }
 
@@ -172,14 +173,14 @@ pub struct SphericalShell {
 }
 
 impl SphericalShell {
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        let c = cs.to_cartesian(self.center.value());
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        let c = self.center.value();
         let (r, w) = (self.radius.value(), self.shell_width.value() / 2.0);
         ((p - c).norm() - r).abs() <= w + tol(r, w)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let c = cs.to_cartesian(self.center.value());
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let c = self.center.value();
         BoundingBox::from_corners(c, c)
             .expanded(self.radius.value() + self.shell_width.value() / 2.0)
     }
@@ -249,11 +250,8 @@ impl Cylinder {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        let (a, b) = (
-            cs.to_cartesian(self.start.value()),
-            cs.to_cartesian(self.stop.value()),
-        );
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        let (a, b) = (self.start.value(), self.stop.value());
         let r = self.radius.value();
         match axial(a, b, p) {
             Some((t, d, len)) => {
@@ -264,11 +262,8 @@ impl Cylinder {
         }
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let (a, b) = (
-            cs.to_cartesian(self.start.value()),
-            cs.to_cartesian(self.stop.value()),
-        );
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let (a, b) = (self.start.value(), self.stop.value());
         cylinder_bbox(a, b, self.radius.value())
     }
 
@@ -295,11 +290,8 @@ pub struct CylindricalShell {
 }
 
 impl CylindricalShell {
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        let (a, b) = (
-            cs.to_cartesian(self.start.value()),
-            cs.to_cartesian(self.stop.value()),
-        );
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        let (a, b) = (self.start.value(), self.stop.value());
         let (r, w) = (self.radius.value(), self.shell_width.value() / 2.0);
         match axial(a, b, p) {
             Some((t, d, len)) => {
@@ -310,11 +302,8 @@ impl CylindricalShell {
         }
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let (a, b) = (
-            cs.to_cartesian(self.start.value()),
-            cs.to_cartesian(self.stop.value()),
-        );
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let (a, b) = (self.start.value(), self.stop.value());
         cylinder_bbox(a, b, self.radius.value() + self.shell_width.value() / 2.0)
     }
 

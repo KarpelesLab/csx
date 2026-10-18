@@ -1,14 +1,13 @@
 //! One- and zero-dimensional primitives: curves, wires and points.
 
-use crate::coords::CoordSystem;
 use crate::error::{Error, Result};
 use crate::math::{BoundingBox, Vec3};
 use crate::param::{ParameterSet, Scalar, ScalarPoint};
 
 use super::geom::{dist_point_segment, tol};
 
-fn polyline_dist(points: &[ScalarPoint], p: Vec3, cs: CoordSystem) -> f64 {
-    let pts: Vec<Vec3> = points.iter().map(|q| cs.to_cartesian(q.value())).collect();
+fn polyline_dist(points: &[ScalarPoint], p: Vec3) -> f64 {
+    let pts: Vec<Vec3> = points.iter().map(|q| q.value()).collect();
     match pts.len() {
         0 => f64::INFINITY,
         1 => (p - pts[0]).norm(),
@@ -19,8 +18,8 @@ fn polyline_dist(points: &[ScalarPoint], p: Vec3, cs: CoordSystem) -> f64 {
     }
 }
 
-fn polyline_bbox(points: &[ScalarPoint], cs: CoordSystem) -> BoundingBox {
-    BoundingBox::from_points(points.iter().map(|q| cs.to_cartesian(q.value())))
+fn polyline_bbox(points: &[ScalarPoint]) -> BoundingBox {
+    BoundingBox::from_points(points.iter().map(|q| q.value()))
 }
 
 fn polyline_scale(points: &[ScalarPoint]) -> f64 {
@@ -48,12 +47,12 @@ impl Curve {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        polyline_dist(&self.points, p, cs) <= tol(polyline_scale(&self.points), 0.0)
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        polyline_dist(&self.points, p) <= tol(polyline_scale(&self.points), 0.0)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        polyline_bbox(&self.points, cs)
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        polyline_bbox(&self.points)
     }
 
     pub(crate) fn dimension(&self) -> usize {
@@ -86,13 +85,13 @@ impl Wire {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
         let r = self.radius.value();
-        polyline_dist(&self.points, p, cs) <= r + tol(polyline_scale(&self.points), r)
+        polyline_dist(&self.points, p) <= r + tol(polyline_scale(&self.points), r)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let b = polyline_bbox(&self.points, cs);
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let b = polyline_bbox(&self.points);
         if b.is_empty() {
             b
         } else {
@@ -136,13 +135,13 @@ impl PointShape {
         PointShape { point: p.into() }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
-        let q = cs.to_cartesian(self.point.value());
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
+        let q = self.point.value();
         (p - q).norm() <= tol(q.norm(), 0.0)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        let q = cs.to_cartesian(self.point.value());
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        let q = self.point.value();
         BoundingBox::from_corners(q, q)
     }
 

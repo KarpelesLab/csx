@@ -9,8 +9,9 @@
 //! Inside tests take a point together with the coordinate system it is
 //! expressed in. The point is converted to Cartesian coordinates, mapped
 //! through the inverse transformation into the primitive's local frame and
-//! tested against the shape, whose defining values are interpreted in the
-//! primitive's coordinate system.
+//! tested against the shape. Only boxes (and multi-boxes) interpret their
+//! values in the primitive's coordinate system — in cylindrical coordinates
+//! they describe annular sectors; every other shape is always Cartesian.
 
 mod basic;
 mod curve;
@@ -172,19 +173,19 @@ impl Shape {
         match self {
             Shape::Box(s) => s.inside(p, cs),
             Shape::MultiBox(s) => s.inside(p, cs),
-            Shape::Sphere(s) => s.inside(p, cs),
-            Shape::SphericalShell(s) => s.inside(p, cs),
-            Shape::Cylinder(s) => s.inside(p, cs),
-            Shape::CylindricalShell(s) => s.inside(p, cs),
-            Shape::Polygon(s) => s.inside(p, cs),
-            Shape::LinPoly(s) => s.inside(p, cs),
+            Shape::Sphere(s) => s.inside(p),
+            Shape::SphericalShell(s) => s.inside(p),
+            Shape::Cylinder(s) => s.inside(p),
+            Shape::CylindricalShell(s) => s.inside(p),
+            Shape::Polygon(s) => s.inside(p),
+            Shape::LinPoly(s) => s.inside(p),
             Shape::RotPoly(s) => s.inside(p),
-            Shape::Curve(s) => s.inside(p, cs),
-            Shape::Wire(s) => s.inside(p, cs),
-            Shape::Point(s) => s.inside(p, cs),
+            Shape::Curve(s) => s.inside(p),
+            Shape::Wire(s) => s.inside(p),
+            Shape::Point(s) => s.inside(p),
             Shape::Polyhedron(s) => s.contains(p),
             Shape::PolyhedronReader(s) => s.mesh.as_ref().is_some_and(|m| m.contains(p)),
-            Shape::UserDefined(s) => s.inside(p, cs),
+            Shape::UserDefined(s) => s.inside(p),
         }
     }
 
@@ -193,16 +194,16 @@ impl Shape {
         match self {
             Shape::Box(s) => s.bbox(cs),
             Shape::MultiBox(s) => s.bbox(cs),
-            Shape::Sphere(s) => s.bbox(cs),
-            Shape::SphericalShell(s) => s.bbox(cs),
-            Shape::Cylinder(s) => s.bbox(cs),
-            Shape::CylindricalShell(s) => s.bbox(cs),
-            Shape::Polygon(s) => s.bbox(cs),
-            Shape::LinPoly(s) => s.bbox(cs),
+            Shape::Sphere(s) => s.bbox(),
+            Shape::SphericalShell(s) => s.bbox(),
+            Shape::Cylinder(s) => s.bbox(),
+            Shape::CylindricalShell(s) => s.bbox(),
+            Shape::Polygon(s) => s.bbox(),
+            Shape::LinPoly(s) => s.bbox(),
             Shape::RotPoly(s) => s.bbox(),
-            Shape::Curve(s) => s.bbox(cs),
-            Shape::Wire(s) => s.bbox(cs),
-            Shape::Point(s) => s.bbox(cs),
+            Shape::Curve(s) => s.bbox(),
+            Shape::Wire(s) => s.bbox(),
+            Shape::Point(s) => s.bbox(),
             Shape::Polyhedron(s) => s.bounding_box(),
             Shape::PolyhedronReader(s) => s
                 .mesh
@@ -213,13 +214,11 @@ impl Shape {
     }
 
     /// Bounds expressed in the shape's own coordinate system, for the shapes
-    /// that are axis aligned in it (boxes and polygon based shapes).
+    /// whose interpretation depends on it (boxes).
     fn native_bbox(&self) -> Option<BoundingBox> {
         match self {
             Shape::Box(s) => Some(s.native()),
             Shape::MultiBox(s) => Some(s.native()),
-            Shape::Polygon(s) => Some(s.native()),
-            Shape::LinPoly(s) => Some(s.native()),
             _ => None,
         }
     }
@@ -370,7 +369,7 @@ impl Primitive {
 
     /// Bounding box expressed in `target` coordinates. For cylindrical
     /// targets the result is `(ρ, α, z)` ranges; it is exact for boxes and
-    /// polygon shapes defined in cylindrical coordinates and conservative
+    /// multi-boxes defined in cylindrical coordinates and conservative
     /// otherwise.
     pub fn bounding_box_in(&self, target: CoordSystem, default_cs: CoordSystem) -> BoundingBox {
         let cs = self.effective_cs(default_cs);
@@ -496,7 +495,7 @@ mod tests {
     #[test]
     fn user_defined() {
         let mut u = UserDefined::new("x^2 + y^2 < R^2 & z > 0");
-        assert!(!u.inside(Vec3::new(0.1, 0.1, 1.0), CoordSystem::Cartesian));
+        assert!(!u.inside(Vec3::new(0.1, 0.1, 1.0)));
         let mut ps = ParameterSet::new();
         ps.set("R", 1.0);
         u.update(&ps).unwrap();

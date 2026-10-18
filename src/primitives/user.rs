@@ -1,6 +1,6 @@
 //! Primitives defined by a user expression.
 
-use crate::coords::{CoordSystem, cartesian_to_spherical};
+use crate::coords::cartesian_to_spherical;
 use crate::error::Result;
 use crate::expr::{CompiledExpr, Expr};
 use crate::math::{BoundingBox, Vec3};
@@ -10,7 +10,7 @@ use crate::param::{ParameterSet, ScalarPoint};
 pub const USER_VARS: [&str; 7] = ["x", "y", "z", "rho", "a", "r", "t"];
 
 /// A primitive whose interior is the set of points where `function`
-/// evaluates to true (`|value| >= 0.5`).
+/// evaluates to a non-zero value.
 ///
 /// Variables: `x, y, z` (Cartesian, relative to `base`), `rho` and `a`
 /// (cylindrical radius and azimuth), `r` and `t` (spherical radius and polar
@@ -26,7 +26,7 @@ pub struct UserDefined {
 
 impl UserDefined {
     /// Creates the primitive; parameter-free functions are compiled
-    /// immediately, others on [`UserDefined::update`].
+    /// immediately, others when the owning structure is updated.
     pub fn new(function: impl Into<String>) -> Self {
         let function = function.into();
         let compiled = Expr::parse(&function)
@@ -39,14 +39,14 @@ impl UserDefined {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
         let Some(f) = &self.compiled else {
             return false;
         };
-        let q = p - cs.to_cartesian(self.base.value());
+        let q = p - self.base.value();
         let (r, t, a) = cartesian_to_spherical(q);
         let rho = q[0].hypot(q[1]);
-        f.eval(&[q[0], q[1], q[2], rho, a, r, t]).abs() >= 0.5
+        f.eval(&[q[0], q[1], q[2], rho, a, r, t]) != 0.0
     }
 
     pub(crate) fn bbox(&self) -> BoundingBox {

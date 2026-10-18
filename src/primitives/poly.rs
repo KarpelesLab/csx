@@ -5,12 +5,10 @@
 //! axes in cyclic order: `u` along `(norm_dir + 1) % 3` and `v` along
 //! `(norm_dir + 2) % 3` (for `norm_dir = 2`: `u = x`, `v = y`).
 //!
-//! In a cylindrical coordinate system, `Polygon` and `LinPoly` are evaluated
-//! in `(ρ, α, z)` coordinate space (like a cylindrical box).
+//! Polygon based primitives are always defined in Cartesian coordinates.
 
 use core::f64::consts::{PI, TAU};
 
-use crate::coords::CoordSystem;
 use crate::error::{Error, Result};
 use crate::math::{BoundingBox, Vec3};
 use crate::param::{ParameterSet, Scalar};
@@ -28,36 +26,6 @@ fn check_dir(d: usize, what: &str) -> Result<()> {
         Ok(())
     } else {
         Err(Error::Invalid(format!("{what} {d} is not an axis (0..=2)")))
-    }
-}
-
-/// Evaluates `f` on the point expressed in `cs`; in cylindrical coordinates
-/// the angular coordinate is tried modulo 2π.
-fn eval_cs(p: Vec3, cs: CoordSystem, f: impl Fn(Vec3) -> bool) -> bool {
-    match cs {
-        CoordSystem::Cartesian => f(p),
-        CoordSystem::Cylindrical => {
-            let c = cs.from_cartesian(p);
-            [0.0, TAU, -TAU]
-                .iter()
-                .any(|&o| f(Vec3::new(c[0], c[1] + o, c[2])))
-        }
-    }
-}
-
-fn native_to_cartesian_bbox(b: BoundingBox, cs: CoordSystem) -> BoundingBox {
-    match cs {
-        CoordSystem::Cartesian => b,
-        CoordSystem::Cylindrical => {
-            if b.is_empty() {
-                return b;
-            }
-            sector_bbox(
-                (b.min[0].max(0.0), b.max[0]),
-                (b.min[1], b.max[1]),
-                (b.min[2], b.max[2]),
-            )
-        }
     }
 }
 
@@ -97,22 +65,20 @@ impl Polygon {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
         let n = self.norm_dir;
         let (u, v) = plane_axes(n);
         let e = self.elevation.value();
-        eval_cs(p, cs, |q| {
-            in_range(q[n], e, e) && point_in_polygon((q[u], q[v]), &self.vertices)
-        })
+        in_range(p[n], e, e) && point_in_polygon((p[u], p[v]), &self.vertices)
     }
 
-    pub(crate) fn native(&self) -> BoundingBox {
+    fn native(&self) -> BoundingBox {
         let e = self.elevation.value();
         verts_bbox(self.norm_dir, &self.vertices, e, e)
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        native_to_cartesian_bbox(self.native(), cs)
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        self.native()
     }
 
     pub(crate) fn dimension(&self) -> usize {
@@ -159,23 +125,21 @@ impl LinPoly {
         }
     }
 
-    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
+    pub(crate) fn inside(&self, p: Vec3) -> bool {
         let n = self.norm_dir;
         let (u, v) = plane_axes(n);
         let e = self.elevation.value();
         let l = self.length.value();
-        eval_cs(p, cs, |q| {
-            in_range(q[n], e, e + l) && point_in_polygon((q[u], q[v]), &self.vertices)
-        })
+        in_range(p[n], e, e + l) && point_in_polygon((p[u], p[v]), &self.vertices)
     }
 
-    pub(crate) fn native(&self) -> BoundingBox {
+    fn native(&self) -> BoundingBox {
         let e = self.elevation.value();
         verts_bbox(self.norm_dir, &self.vertices, e, e + self.length.value())
     }
 
-    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
-        native_to_cartesian_bbox(self.native(), cs)
+    pub(crate) fn bbox(&self) -> BoundingBox {
+        self.native()
     }
 
     pub(crate) fn dimension(&self) -> usize {
@@ -332,12 +296,12 @@ mod tests {
     fn polygon_axes() {
         // norm z: u = x, v = y
         let p = Polygon::new(2, 0.5, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)]);
-        assert!(p.inside(Vec3::new(1.5, 0.5, 0.5), CoordSystem::Cartesian));
-        assert!(!p.inside(Vec3::new(0.5, 1.5, 0.5), CoordSystem::Cartesian));
-        assert!(!p.inside(Vec3::new(1.5, 0.5, 0.6), CoordSystem::Cartesian));
+        assert!(p.inside(Vec3::new(1.5, 0.5, 0.5)));
+        assert!(!p.inside(Vec3::new(0.5, 1.5, 0.5)));
+        assert!(!p.inside(Vec3::new(1.5, 0.5, 0.6)));
         // norm x: u = y, v = z
         let p = Polygon::new(0, 0.0, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)]);
-        assert!(p.inside(Vec3::new(0.0, 1.5, 0.5), CoordSystem::Cartesian));
+        assert!(p.inside(Vec3::new(0.0, 1.5, 0.5)));
         assert_eq!(p.dimension(), 2);
     }
 
@@ -345,9 +309,9 @@ mod tests {
     fn linpoly() {
         let l = LinPoly::new(1, 1.0, -2.0, square());
         // norm y: u = z, v = x
-        assert!(l.inside(Vec3::new(0.25, 0.0, 0.75), CoordSystem::Cartesian));
-        assert!(!l.inside(Vec3::new(0.25, 1.5, 0.75), CoordSystem::Cartesian));
-        let b = l.bbox(CoordSystem::Cartesian);
+        assert!(l.inside(Vec3::new(0.25, 0.0, 0.75)));
+        assert!(!l.inside(Vec3::new(0.25, 1.5, 0.75)));
+        let b = l.bbox();
         assert_eq!(b.min, Vec3::new(0.0, -1.0, 0.0));
         assert_eq!(b.max, Vec3::new(1.0, 1.0, 1.0));
     }
@@ -371,17 +335,5 @@ mod tests {
         half.stop_angle = Scalar::new(PI / 2.0);
         assert!(half.inside(Vec3::new(1.0, 1.0, 0.5)));
         assert!(!half.inside(Vec3::new(-1.0, 1.0, 0.5)));
-    }
-
-    #[test]
-    fn cylindrical_polygon() {
-        // Sector in (rho, alpha) plane at z=0: rho 1..2, alpha -0.1..0.1
-        let p = Polygon::new(
-            2,
-            0.0,
-            vec![(1.0, -0.1), (2.0, -0.1), (2.0, 0.1), (1.0, 0.1)],
-        );
-        assert!(p.inside(Vec3::new(1.5, 0.0, 0.0), CoordSystem::Cylindrical));
-        assert!(!p.inside(Vec3::new(0.0, 1.5, 0.0), CoordSystem::Cylindrical));
     }
 }
