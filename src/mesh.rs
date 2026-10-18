@@ -232,11 +232,11 @@ fn thirds_lines(
     cs: CoordSystem,
     d: [f64; 3],
 ) -> ([Vec<f64>; 3], [Vec<f64>; 3]) {
-    let metal = TypeMask::of(PropertyType::Metal) | TypeMask::of(PropertyType::ConductingSheet);
     let mut add: [Vec<f64>; 3] = Default::default();
     let mut remove: [Vec<f64>; 3] = Default::default();
     for (prop, prim) in s.primitives() {
         let t = prop.property_type();
+        let metal = TypeMask::of(PropertyType::Metal) | TypeMask::of(PropertyType::ConductingSheet);
         if !mask.contains(t) || !metal.contains(t) || !matches!(prim.shape, Shape::Box(_)) {
             continue;
         }
@@ -318,20 +318,38 @@ impl MeshBuilder {
                 lines[dir].extend(&add[dir]);
             }
         }
+        // A cylindrical model whose primitives all span full revolutions
+        // defines no angular lines; mesh the full circle then.
+        if cs == CoordSystem::Cylindrical && lines[1].len() < 2 && self.extra[1].len() < 2 {
+            lines[1].extend([-core::f64::consts::PI, core::f64::consts::PI]);
+        }
         for dir in 0..3 {
             lines[dir].extend(self.extra[dir].iter().copied());
             normalize(&mut lines[dir]);
             if let (Some(&lo), Some(&hi)) = (lines[dir].first(), lines[dir].last()) {
                 let [below, above] = o.margin[dir];
+                let angular = cs == CoordSystem::Cylindrical && dir == 1;
                 if below > 0.0 {
                     let mut l = lo - below;
                     if cs == CoordSystem::Cylindrical && dir == 0 {
                         l = l.max(0.0);
                     }
-                    lines[dir].insert(0, l);
+                    if angular {
+                        // never exceed a full turn
+                        l = l.max(hi - core::f64::consts::TAU);
+                    }
+                    if l < lo {
+                        lines[dir].insert(0, l);
+                    }
                 }
                 if above > 0.0 {
-                    lines[dir].push(hi + above);
+                    let mut h = hi + above;
+                    if angular {
+                        h = h.min(lines[dir][0] + core::f64::consts::TAU);
+                    }
+                    if h > hi {
+                        lines[dir].push(h);
+                    }
                 }
             }
             if let Some(min) = o.min_res {
@@ -490,6 +508,30 @@ mod tests {
         assert_eq!(g.coord_system, CoordSystem::Cylindrical);
         assert_eq!(g.lines(0)[0], 0.0); // clamped radial margin
         assert!(g.cell_size_range(1).unwrap().1 <= 0.1 + 1e-9);
+    }
+
+    #[test]
+    fn cylindrical_full_revolution() {
+        // Only full-revolution primitives: no angular lines are detected,
+        // the mesher falls back to the full circle (regression: the alpha
+        // axis was left empty and discretize failed).
+        let mut s = ContinuousStructure::new();
+        s.coord_system = CoordSystem::Cylindrical;
+        let m = s.add_property(Property::metal("inner"));
+        s.add_primitive(m, Cylinder::new([0.0, 0.0, 0.0], [0.0, 0.0, 10.0], 1.0))
+            .unwrap();
+        let g = MeshBuilder::new(
+            MeshOptions::new(0.5)
+                .with_max_res([0.5, 0.2, 1.0])
+                .with_margin(1.0),
+        )
+        .build(&s)
+        .unwrap();
+        let a = g.lines(1);
+        assert!(a.len() > 2);
+        assert!((a[0] + PI).abs() < 1e-12 && (a[a.len() - 1] - PI).abs() < 1e-12);
+        s.grid = g;
+        assert!(crate::discretize::discretize(&s, &Default::default()).is_ok());
     }
 
     #[test]
