@@ -521,3 +521,26 @@ fn unknown_children_survive_roundtrip() {
     assert_eq!(nested.attr("a"), Some("1"));
     assert_eq!(nested.child("Nested").unwrap().text(), "text & more");
 }
+
+#[test]
+fn grid_and_background_extra_attributes_survive() {
+    let xml = r#"<ContinuousStructure CoordSystem="0">
+  <RectilinearGrid DeltaUnit="0.001" CoordSystem="0" Vendor="x">
+    <XLines>0,1</XLines><YLines>0,1</YLines><ZLines>0,1</ZLines>
+  </RectilinearGrid>
+  <BackgroundMaterial Epsilon="2" Mue="1" Kappa="0" Sigma="0" Custom="7"/>
+  <Properties/>
+</ContinuousStructure>"#;
+    let s = ContinuousStructure::from_xml_str(xml).unwrap();
+    assert_eq!(
+        s.grid.extra_attributes,
+        vec![("Vendor".to_owned(), "x".to_owned())]
+    );
+    assert_eq!(
+        s.background.extra_attributes,
+        vec![("Custom".to_owned(), "7".to_owned())]
+    );
+    let out = s.to_xml_string();
+    let r = ContinuousStructure::from_xml_str(&out).unwrap();
+    assert_eq!(r, s);
+}

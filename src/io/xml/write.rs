@@ -58,6 +58,7 @@ pub(super) fn structure(s: &ContinuousStructure) -> Element {
     let mut ge = Element::new("RectilinearGrid")
         .with_attr("DeltaUnit", format_f64(g.delta_unit))
         .with_attr("CoordSystem", g.coord_system.id().to_string());
+    extend(&mut ge, &g.extra_attributes);
     for (dir, name) in ["XLines", "YLines", "ZLines"].into_iter().enumerate() {
         let lines = g.lines(dir);
         let mut l = Element::new(name).with_attr("Qty", lines.len().to_string());
@@ -69,13 +70,13 @@ pub(super) fn structure(s: &ContinuousStructure) -> Element {
     el.push(ge);
 
     let bg = &s.background;
-    el.push(
-        Element::new("BackgroundMaterial")
-            .with_attr("Epsilon", bg.epsilon.to_text())
-            .with_attr("Mue", bg.mue.to_text())
-            .with_attr("Kappa", bg.kappa.to_text())
-            .with_attr("Sigma", bg.sigma.to_text()),
-    );
+    let mut be = Element::new("BackgroundMaterial")
+        .with_attr("Epsilon", bg.epsilon.to_text())
+        .with_attr("Mue", bg.mue.to_text())
+        .with_attr("Kappa", bg.kappa.to_text())
+        .with_attr("Sigma", bg.sigma.to_text());
+    extend(&mut be, &bg.extra_attributes);
+    el.push(be);
     el.push(parameters(&s.parameters));
 
     let mut props = Element::new("Properties");
@@ -388,10 +389,10 @@ fn primitive(p: &Primitive) -> Element {
             }
         }
         Shape::PolyhedronReader(s) => {
-            el.set_attr("FileName", s.file_name.clone());
+            el.set_attr("FileName", s.file_name().to_owned());
             el.set_attr(
                 "FileType",
-                match s.file_type {
+                match s.file_type() {
                     MeshFileType::Stl => "STL",
                     MeshFileType::Ply => "PLY",
                 },
@@ -400,7 +401,7 @@ fn primitive(p: &Primitive) -> Element {
         Shape::UserDefined(s) => {
             el.push(point("CoordShift", &s.base));
             let mut e = Element::new("Equation");
-            e.push_text(s.function.clone());
+            e.push_text(s.function().to_owned());
             el.push(e);
         }
     }

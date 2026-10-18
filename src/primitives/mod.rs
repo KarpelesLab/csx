@@ -71,14 +71,22 @@ impl MeshFileType {
 }
 
 /// A polyhedron loaded from an external mesh file.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// The loaded mesh is a cache of the file contents: changing the file name
+/// or type through the setters discards it, and
+/// [`crate::ContinuousStructure::update`] (or [`PolyhedronReader::load`])
+/// loads it again. Equality compares the definition only.
+#[derive(Debug, Clone, Default)]
 pub struct PolyhedronReader {
-    /// File name as written in the model.
-    pub file_name: String,
-    /// File format.
-    pub file_type: MeshFileType,
-    /// Loaded mesh (`None` until [`PolyhedronReader::load`] succeeds).
-    pub mesh: Option<Polyhedron>,
+    file_name: String,
+    file_type: MeshFileType,
+    mesh: Option<Polyhedron>,
+}
+
+impl PartialEq for PolyhedronReader {
+    fn eq(&self, o: &Self) -> bool {
+        self.file_name == o.file_name && self.file_type == o.file_type
+    }
 }
 
 impl PolyhedronReader {
@@ -93,6 +101,56 @@ impl PolyhedronReader {
         }
     }
 
+    /// Builder: overrides the file type.
+    pub fn with_file_type(mut self, t: MeshFileType) -> Self {
+        self.set_file_type(t);
+        self
+    }
+
+    /// File name as written in the model.
+    pub fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    /// File format.
+    pub fn file_type(&self) -> MeshFileType {
+        self.file_type
+    }
+
+    /// Changes the file name, discarding any loaded mesh.
+    pub fn set_file_name(&mut self, name: impl Into<String>) {
+        self.file_name = name.into();
+        self.mesh = None;
+    }
+
+    /// Changes the file type, discarding any loaded mesh.
+    pub fn set_file_type(&mut self, t: MeshFileType) {
+        if t != self.file_type {
+            self.file_type = t;
+            self.mesh = None;
+        }
+    }
+
+    /// The loaded mesh, if any.
+    pub fn mesh(&self) -> Option<&Polyhedron> {
+        self.mesh.as_ref()
+    }
+
+    /// True once the mesh has been loaded.
+    pub fn is_loaded(&self) -> bool {
+        self.mesh.is_some()
+    }
+
+    /// Loads the mesh from in-memory file contents (format per
+    /// [`PolyhedronReader::file_type`]).
+    pub fn load_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.mesh = Some(match self.file_type {
+            MeshFileType::Stl => crate::io::stl::parse(data)?,
+            MeshFileType::Ply => crate::io::ply::parse(data)?,
+        });
+        Ok(())
+    }
+
     /// Loads the mesh from disk. Relative paths are resolved against
     /// `base_dir` when given.
     pub fn load(&mut self, base_dir: Option<&std::path::Path>) -> Result<()> {
@@ -103,11 +161,7 @@ impl PolyhedronReader {
             path = b.join(path);
         }
         let data = std::fs::read(&path)?;
-        self.mesh = Some(match self.file_type {
-            MeshFileType::Stl => crate::io::stl::parse(&data)?,
-            MeshFileType::Ply => crate::io::ply::parse(&data)?,
-        });
-        Ok(())
+        self.load_bytes(&data)
     }
 }
 

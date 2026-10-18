@@ -15,28 +15,52 @@ pub const USER_VARS: [&str; 7] = ["x", "y", "z", "rho", "a", "r", "t"];
 /// Variables: `x, y, z` (Cartesian, relative to `base`), `rho` and `a`
 /// (cylindrical radius and azimuth), `r` and `t` (spherical radius and polar
 /// angle). The extent is unbounded.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// The function is private so its compiled form can never go stale; change
+/// it with [`UserDefined::set_function`]. Functions that reference
+/// parameters are compiled when the owning structure is updated.
+#[derive(Debug, Clone, Default)]
 pub struct UserDefined {
-    /// The defining expression.
-    pub function: String,
+    function: String,
     /// Origin of the local coordinates.
     pub base: ScalarPoint,
     compiled: Option<CompiledExpr>,
+}
+
+impl PartialEq for UserDefined {
+    /// Compares the definitions (function text and base point).
+    fn eq(&self, o: &Self) -> bool {
+        self.function == o.function && self.base == o.base
+    }
 }
 
 impl UserDefined {
     /// Creates the primitive; parameter-free functions are compiled
     /// immediately, others when the owning structure is updated.
     pub fn new(function: impl Into<String>) -> Self {
-        let function = function.into();
-        let compiled = Expr::parse(&function)
+        let mut u = UserDefined::default();
+        u.set_function(function);
+        u
+    }
+
+    /// The defining expression.
+    pub fn function(&self) -> &str {
+        &self.function
+    }
+
+    /// Replaces the defining expression. Parameter-free functions are
+    /// compiled immediately; others are compiled by the next update, and
+    /// until then the primitive contains no point.
+    pub fn set_function(&mut self, function: impl Into<String>) {
+        self.function = function.into();
+        self.compiled = Expr::parse(&self.function)
             .and_then(|e| e.compile(&USER_VARS, |_| None))
             .ok();
-        UserDefined {
-            function,
-            base: ScalarPoint::default(),
-            compiled,
-        }
+    }
+
+    /// True once the function has been compiled successfully.
+    pub fn is_compiled(&self) -> bool {
+        self.compiled.is_some()
     }
 
     pub(crate) fn inside(&self, p: Vec3) -> bool {

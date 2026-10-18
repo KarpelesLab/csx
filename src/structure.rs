@@ -22,6 +22,8 @@ pub struct BackgroundMaterial {
     pub kappa: Scalar,
     /// Magnetic conductivity.
     pub sigma: Scalar,
+    /// Unrecognised attributes preserved from files.
+    pub extra_attributes: Vec<(String, String)>,
 }
 
 impl Default for BackgroundMaterial {
@@ -31,6 +33,7 @@ impl Default for BackgroundMaterial {
             mue: Scalar::new(1.0),
             kappa: Scalar::new(0.0),
             sigma: Scalar::new(0.0),
+            extra_attributes: Vec::new(),
         }
     }
 }
@@ -84,6 +87,17 @@ pub struct Medium {
 
 /// The complete model: properties with their primitives, the mesh, the
 /// parameters and the background material.
+///
+/// # The update contract
+///
+/// Values that may be expressions ([`Scalar`], polygon vertices, weighting
+/// functions, transformations, user-defined functions) cache their evaluated
+/// form. Plain numbers are usable immediately; anything referring to
+/// parameters is evaluated by [`ContinuousStructure::update`]. Call it after
+/// changing [`ContinuousStructure::parameters`] or adding parametric
+/// content, before querying. Caches that could silently go stale
+/// (compiled user functions, loaded mesh files) are only reachable through
+/// setters that invalidate them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContinuousStructure {
     properties: Vec<Property>,
@@ -198,7 +212,7 @@ impl ContinuousStructure {
         for p in &mut self.properties {
             for prim in &mut p.primitives {
                 if let Shape::PolyhedronReader(r) = &mut prim.shape
-                    && r.mesh.is_none()
+                    && !r.is_loaded()
                 {
                     r.load(self.base_dir.as_deref())?;
                 }

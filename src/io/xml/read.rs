@@ -232,6 +232,7 @@ pub(super) fn structure(el: &Element) -> Result<ContinuousStructure> {
                 *slot = v;
             }
         }
+        bg.extra_attributes = a.rest();
     }
     if let Some(props) = el.child("Properties") {
         for p in props.elements() {
@@ -283,11 +284,12 @@ fn parameters(el: &Element) -> Result<ParameterSet> {
 }
 
 fn grid(el: &Element, s: &mut ContinuousStructure) -> Result<()> {
+    let a = Attrs::new(el);
     let g = &mut s.grid;
-    if let Some(du) = el.attr("DeltaUnit") {
+    if let Some(du) = a.get("DeltaUnit") {
         g.delta_unit = s.parameters.eval(du)?;
     }
-    if let Some(cs) = el.attr("CoordSystem") {
+    if let Some(cs) = a.get("CoordSystem") {
         g.coord_system =
             coord_system(cs).ok_or_else(|| Error::Format(format!("CoordSystem {cs:?}")))?;
     }
@@ -303,6 +305,7 @@ fn grid(el: &Element, s: &mut ContinuousStructure) -> Result<()> {
             g.set_lines(dir, v)?;
         }
     }
+    g.extra_attributes = a.rest();
     Ok(())
 }
 
@@ -782,11 +785,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
                     .ok_or_else(|| Error::Format(format!("unknown mesh file type {t:?}")))?,
                 None => MeshFileType::from_path(&file_name).unwrap_or_default(),
             };
-            Shape::PolyhedronReader(PolyhedronReader {
-                file_name,
-                file_type,
-                mesh: None,
-            })
+            Shape::PolyhedronReader(PolyhedronReader::new(file_name).with_file_type(file_type))
         }
         "UserDefined" => {
             let f = el

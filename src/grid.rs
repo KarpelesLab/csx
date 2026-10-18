@@ -17,6 +17,8 @@ pub struct RectilinearGrid {
     pub delta_unit: f64,
     /// Coordinate system of the grid.
     pub coord_system: CoordSystem,
+    /// Unrecognised attributes preserved from files.
+    pub extra_attributes: Vec<(String, String)>,
 }
 
 impl Default for RectilinearGrid {
@@ -25,6 +27,7 @@ impl Default for RectilinearGrid {
             lines: Default::default(),
             delta_unit: 1.0,
             coord_system: CoordSystem::Cartesian,
+            extra_attributes: Vec::new(),
         }
     }
 }

@@ -580,8 +580,7 @@ pub fn tessellate(
             triangles: p.triangles().to_vec(),
         },
         Shape::PolyhedronReader(r) => r
-            .mesh
-            .as_ref()
+            .mesh()
             .map(|p| TriMesh {
                 vertices: p.vertices().to_vec(),
                 triangles: p.triangles().to_vec(),
