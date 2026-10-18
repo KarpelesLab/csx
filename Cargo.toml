@@ -25,3 +25,19 @@ missing_docs = "warn"
 [[example]]
 name = "info"
 required-features = ["xml"]
+
+[[example]]
+name = "patch_antenna"
+required-features = ["xml"]
+
+[[example]]
+name = "export_vtk"
+required-features = ["xml"]
+
+[[example]]
+name = "discretize"
+required-features = ["xml"]
+
+[[test]]
+name = "end_to_end"
+required-features = ["xml"]

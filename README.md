@@ -35,12 +35,31 @@ Status: early development — see [PLAN.md](PLAN.md).
 
 ## Example
 
-```rust,ignore
-let model = csx::ContinuousStructure::read_file("patch.xml")?;
-let hit = model.property_at(csx::Vec3::new(0.0, 0.0, 0.5), csx::CoordSystem::Cartesian, csx::TypeMask::ANY);
+```rust
+use csx::primitives::BoxShape;
+use csx::properties::Material;
+use csx::{ContinuousStructure, CoordSystem, Property, TypeMask, Vec3};
+
+let mut model = ContinuousStructure::new();
+let fr4 = model.add_property(Property::material("FR4", Material::new(4.3, 0.0)));
+model.add_primitive(fr4, BoxShape::new([-10.0, -10.0, 0.0], [10.0, 10.0, 1.6])).unwrap();
+
+// Write and read back a CSXCAD XML file (feature `xml`).
+let xml = model.to_xml_string();
+let model = ContinuousStructure::from_xml_str(&xml).unwrap();
+
+let hit = model.property_at(Vec3::new(0.0, 0.0, 0.5), CoordSystem::Cartesian, TypeMask::ANY);
+assert_eq!(hit.unwrap().property.name, "FR4");
 ```
 
-See `cargo run --example info -- file.xml`.
+More examples:
+
+* `cargo run --example info -- file.xml` — summary of a CSXCAD/openEMS file
+* `cargo run --example patch_antenna -- out.xml [out.vtk]` — build, mesh and
+  write a parametric patch antenna
+* `cargo run --example export_vtk -- file.xml out_dir` — VTK + STL export
+* `cargo run --release --example discretize -- file.xml` — discretise onto
+  the mesh and print statistics
 
 ## Features
 
