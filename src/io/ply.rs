@@ -103,6 +103,25 @@ impl Reader<'_> {
 /// Parses PLY data into a polyhedron. Uses the `x`, `y`, `z` properties of
 /// the `vertex` element and the `vertex_indices` (or `vertex_index`) list of
 /// the `face` element; everything else is skipped.
+///
+/// ```
+/// use csx::io::ply;
+///
+/// let data = "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\n\
+///             property float y\nproperty float z\nelement face 1\n\
+///             property list uchar int vertex_indices\nend_header\n\
+///             0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n";
+/// let p = ply::parse(data.as_bytes())?;
+/// assert_eq!(p.faces().len(), 1);
+/// assert!(!p.is_closed()); // a single triangle is an open surface
+/// # Ok::<(), csx::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`Error::Format`] for a missing or malformed header, unknown types,
+/// counts that cannot fit in the data, or truncated / malformed bodies;
+/// [`Error::Invalid`] if faces reference missing vertices.
 pub fn parse(data: &[u8]) -> Result<Polyhedron> {
     let end =
         find_header_end(data).ok_or_else(|| Error::Format("PLY: missing end_header".into()))?;

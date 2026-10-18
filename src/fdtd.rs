@@ -5,7 +5,48 @@
 //! attributes are written back unchanged; [`FdtdSettings::gaussian`]
 //! gives a complete set of commonly used values. With the `xml` feature,
 //! [`FdtdSettings::from_xml_element`] and [`FdtdSettings::to_xml_element`]
-//! convert from / to the XML representation.
+//! convert from / to the XML representation, and
+//! `OpenEmsDocument::fdtd_settings` / `set_fdtd_settings` access the
+//! settings of a whole openEMS file.
+//!
+//! # Excitation signals
+//!
+//! | Signal | Type id | Amplitude `s(t)` |
+//! |---|---|---|
+//! | [`ExcitationSignal::Gaussian`] | 0 | `cos(2π f0 (t − T0)) · exp(−((t − T0)/τ)²)`, `τ = √(ln 10)/(π fc)`, `T0 = τ √(6 ln 10)` |
+//! | [`ExcitationSignal::Sinus`] | 1 | `sin(2π f0 t)` |
+//! | [`ExcitationSignal::Dirac`] | 2 | `1` at `t = 0`, else `0` |
+//! | [`ExcitationSignal::Step`] | 3 | `1` for `t ≥ 0`, else `0` |
+//! | [`ExcitationSignal::Custom`] | 10 | user expression of `t` (and `f0`, `f_max`) |
+//!
+//! The Gaussian pulse's spectrum is 20 dB below its peak at `f0 ± fc`; the
+//! pulse starts and ends (after `2 T0`) at 10⁻⁶ of its peak envelope.
+//!
+//! # Boundaries
+//!
+//! [`Boundary`] parses the textual (`PEC`, `PMC`, `MUR`, `PML_8`, also
+//! `PML 8`) and numeric (`0`–`3`) forms found in files and always writes the
+//! textual form.
+//!
+//! # Example
+//!
+//! ```
+//! use csx::fdtd::{Boundary, BoundaryConditions, ExcitationSignal, FdtdSettings};
+//!
+//! let mut fdtd = FdtdSettings::gaussian(2.4e9, 1.0e9);
+//! fdtd.end_criteria = Some(1e-4); // stop at −40 dB energy
+//! let mut bc = BoundaryConditions::all(Boundary::Pml(8));
+//! bc.faces[4] = Boundary::Pec; // zmin: ground plane
+//! fdtd.boundary = Some(bc);
+//! fdtd.validate()?;
+//!
+//! let signal = fdtd.excitation.as_ref().unwrap();
+//! assert_eq!(signal.max_frequency(), 3.4e9);
+//! let t0 = signal.gaussian_delay().unwrap();
+//! assert!((signal.eval(t0) - 1.0).abs() < 1e-12); // peak at T0
+//! assert_eq!("PML_8".parse::<Boundary>()?, Boundary::Pml(8));
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use core::f64::consts::PI;
 
@@ -105,7 +146,21 @@ impl ExcitationSignal {
     }
 
     /// Builds an evaluator of the signal amplitude at time `t` (s).
-    /// Fails only for custom signals whose expression is invalid.
+    ///
+    /// ```
+    /// use csx::fdtd::ExcitationSignal;
+    ///
+    /// let s = ExcitationSignal::Custom { function: "sin(2*pi*f0*t)".into(), f0: 1e9, f_max: 1e9 };
+    /// let f = s.evaluator()?;
+    /// assert!((f.eval(0.25e-9) - 1.0).abs() < 1e-12);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Only for custom signals: [`Error::Parse`] if the expression is
+    /// invalid, [`Error::UnknownVariable`] if it uses names other than `t`,
+    /// `f0`, `f_max` (`fmax`) and the built-in constants.
     pub fn evaluator(&self) -> Result<SignalFn> {
         Ok(match self {
             ExcitationSignal::Custom {
@@ -251,6 +306,14 @@ pub const FACE_NAMES: [&str; 6] = ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax
 
 impl BoundaryConditions {
     /// The same condition on all faces.
+    ///
+    /// ```
+    /// use csx::fdtd::{Boundary, BoundaryConditions, FACE_NAMES};
+    ///
+    /// let bc = BoundaryConditions::all(Boundary::Mur);
+    /// assert_eq!(bc.faces.len(), FACE_NAMES.len());
+    /// assert_eq!(bc.faces[0].to_string(), "MUR");
+    /// ```
     pub fn all(b: Boundary) -> Self {
         BoundaryConditions {
             faces: [b; 6],
@@ -316,6 +379,12 @@ impl FdtdSettings {
     }
 
     /// Checks the settings for obviously invalid values.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] for a non-positive end criterion or a Gaussian
+    /// pulse without positive `fc` (or with negative `f0`); the errors of
+    /// [`ExcitationSignal::evaluator`] for invalid custom signals.
     pub fn validate(&self) -> Result<()> {
         let bad = |m: &str| Err(Error::Invalid(m.into()));
         if self.end_criteria.is_some_and(|e| e.is_nan() || e <= 0.0) {

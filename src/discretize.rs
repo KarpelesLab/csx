@@ -3,7 +3,49 @@
 //! [`discretize`] turns the continuous model into per-edge / per-face
 //! arrays suitable for a Yee-scheme solver.
 //!
+//! ```
+//! use csx::discretize::{DiscretizeOptions, discretize};
+//! use csx::primitives::BoxShape;
+//! use csx::properties::Material;
+//! use csx::{ContinuousStructure, Property};
+//!
+//! let mut s = ContinuousStructure::new();
+//! let d = s.add_property(Property::material("diel", Material::new(4.0, 0.0)));
+//! s.add_primitive(d, BoxShape::new([0.0, 0.0, 0.0], [2.0, 2.0, 1.0]))?;
+//! let pec = s.add_property(Property::metal("plate"));
+//! s.add_primitive(pec, BoxShape::new([0.0, 0.0, 2.0], [2.0, 2.0, 2.0]))?;
+//! for dir in 0..3 {
+//!     s.grid.set_lines(dir, [0.0, 1.0, 2.0])?;
+//! }
+//!
+//! let g = discretize(&s, &DiscretizeOptions::default().with_threads(1))?;
+//! // Inside the block.
+//! assert_eq!(g.epsilon[0][g.index([0, 1, 0])], 4.0);
+//! // On its top face (z = 1): two of the four quarter cells around the
+//! // edge are dielectric, two are air.
+//! assert!((g.epsilon[0][g.index([0, 1, 1])] - 2.5).abs() < 1e-12);
+//! // The x edges in the plane z = 2 lie on the metal sheet.
+//! assert!(g.pec[0][g.index([0, 1, 2])]);
+//! assert!(g.warnings.is_empty());
+//! # Ok::<(), csx::Error>(())
+//! ```
+//!
 //! # Conventions
+//!
+//! ```text
+//!              z
+//!              │   H_x (face normal to x, centred)
+//!              │  ╱
+//!     (i,j,k+1)●───────────●
+//!              │╲    ·    ╱│
+//!         E_z  │  ·     ·  │       ● node (i, j, k): mesh line intersection
+//!              │    ·      │       E_d: edge from the node towards +d,
+//!              ●───────────●── y        sampled at the edge centre
+//!         (i,j,k)   E_y            H_d: face normal to d with lowest corner
+//!             ╱                         at the node, sampled at its centre
+//!            ╱ E_x
+//!           x
+//! ```
 //!
 //! * **Nodes** are the intersections of the mesh lines; node `(i, j, k)` has
 //!   the flat index `i + nx·(j + ny·k)` (see [`MaterialGrid::index`]). All
@@ -204,13 +246,22 @@ impl MaterialGrid {
         self.len() == 0
     }
 
-    /// Flat index of node `(i, j, k)`.
+    /// Flat index `i + nx·(j + ny·k)` of node `(i, j, k)`.
     #[inline]
     pub fn index(&self, n: [usize; 3]) -> usize {
         n[0] + self.dims[0] * (n[1] + self.dims[1] * n[2])
     }
 
-    /// Node of a flat index.
+    /// Node of a flat index (inverse of [`MaterialGrid::index`]).
+    ///
+    /// ```
+    /// # use csx::{ContinuousStructure, discretize::{discretize, DiscretizeOptions}};
+    /// # let mut s = ContinuousStructure::new();
+    /// # for d in 0..3 { s.grid.set_lines(d, [0.0, 1.0, 2.0, 3.0])?; }
+    /// let g = discretize(&s, &DiscretizeOptions::default())?;
+    /// assert_eq!(g.node(g.index([1, 2, 3])), [1, 2, 3]);
+    /// # Ok::<(), csx::Error>(())
+    /// ```
     #[inline]
     pub fn node(&self, idx: usize) -> [usize; 3] {
         let i = idx % self.dims[0];
@@ -249,7 +300,15 @@ pub const MAX_NODES: usize = (u32::MAX as usize).saturating_add(1);
 
 /// Discretises the materials, metals, sheets, excitations and lumped
 /// elements of `s` onto `s.grid`. The structure should be up to date (see
-/// [`ContinuousStructure::update`]).
+/// [`ContinuousStructure::update`]). Work is split over
+/// [`DiscretizeOptions::threads`] threads; results do not depend on the
+/// thread count.
+///
+/// # Errors
+///
+/// [`Error::Invalid`] if an axis of the grid has no lines, if
+/// [`DiscretizeOptions::subsampling`] is outside `1..=`[`MAX_SUBSAMPLING`],
+/// or if the grid has more than [`MAX_NODES`] nodes.
 pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<MaterialGrid> {
     let dims = s.grid.num_lines();
     if dims.contains(&0) {

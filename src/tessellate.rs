@@ -5,6 +5,41 @@
 //! outward oriented meshes; sheets (polygons, flat boxes) produce open
 //! surfaces; curves, points and expression-defined primitives produce empty
 //! meshes (see [`polyline`] for curves).
+//!
+//! | Shape | Result |
+//! |---|---|
+//! | `Box` | closed box; flat boxes give one rectangle; cylindrical boxes give a sector discretised by angle (full turns are seamed, inner radius 0 allowed) |
+//! | `MultiBox` | one closed box per entry |
+//! | `Sphere` | closed UV sphere ([`TessellationOptions::sphere_rings`] bands, exact poles) |
+//! | `SphericalShell` | outer sphere plus reversed inner sphere |
+//! | `Cylinder` | closed cylinder around an arbitrary axis |
+//! | `CylindricalShell` | closed tube; zero width gives the open mantle |
+//! | `Polygon` | open, ear-clipped surface whose normal points along `+norm_dir` |
+//! | `LinPoly` | closed extrusion (caps and sides), either sign of length |
+//! | `RotPoly` | closed revolution, partial or full, polygon may touch the axis |
+//! | `Wire` | tube per segment plus spheres at the joints |
+//! | `Polyhedron`, `PolyhedronReader` | copied as is (reader: once loaded) |
+//! | `Curve`, `Point`, `UserDefined` | empty mesh |
+//!
+//! Circles use [`TessellationOptions::segments`] segments for a full turn.
+//!
+//! ```
+//! use csx::primitives::{Cylinder, Primitive};
+//! use csx::tessellate::{TessellationOptions, tessellate};
+//! use csx::CoordSystem;
+//!
+//! let cyl = Primitive::new(Cylinder::new([0.0, 0.0, 0.0], [0.0, 0.0, 2.0], 1.0));
+//! let opts = TessellationOptions::default().with_segments(64);
+//! let mesh = tessellate(&cyl, CoordSystem::Cartesian, &opts);
+//! assert!(mesh.to_polyhedron()?.is_closed());
+//! // A 64-gon prism slightly underestimates π·r²·h.
+//! let v = mesh.signed_volume();
+//! assert!(v > 6.2 && v < 2.0 * core::f64::consts::PI);
+//! # Ok::<(), csx::Error>(())
+//! ```
+//!
+//! Whole structures are tessellated with [`tessellate_structure`] and can be
+//! exported with [`crate::io::export`].
 
 use std::collections::HashMap;
 
@@ -82,6 +117,17 @@ impl TriMesh {
 
     /// Builds a mesh from a triangle soup, merging bitwise identical
     /// vertices and dropping degenerate triangles (repeated vertices).
+    ///
+    /// ```
+    /// use csx::Vec3;
+    /// use csx::tessellate::TriMesh;
+    ///
+    /// let (a, b, c, d) = (Vec3::ZERO, Vec3::unit(0), Vec3::unit(1), Vec3::new(1.0, 1.0, 0.0));
+    /// let m = TriMesh::from_soup(&[[a, b, d], [a, d, c], [a, a, b]]);
+    /// assert_eq!(m.vertices.len(), 4);
+    /// assert_eq!(m.triangles.len(), 2); // the degenerate one is dropped
+    /// assert!((m.area() - 1.0).abs() < 1e-12);
+    /// ```
     pub fn from_soup(soup: &[[Vec3; 3]]) -> Self {
         let mut index: HashMap<[u64; 3], u32> = HashMap::new();
         let mut m = TriMesh::new();
@@ -136,6 +182,11 @@ impl TriMesh {
     }
 
     /// The triangles as vertex position triples.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a triangle references a vertex index out of range (meshes
+    /// built by this module never do).
     pub fn triangle_soup(&self) -> Vec<[Vec3; 3]> {
         self.triangles
             .iter()
@@ -144,6 +195,10 @@ impl TriMesh {
     }
 
     /// Signed enclosed volume (positive for outward oriented closed meshes).
+    ///
+    /// # Panics
+    ///
+    /// Same as [`TriMesh::triangle_soup`].
     pub fn signed_volume(&self) -> f64 {
         self.triangle_soup()
             .iter()
@@ -153,6 +208,10 @@ impl TriMesh {
     }
 
     /// Total surface area.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`TriMesh::triangle_soup`].
     pub fn area(&self) -> f64 {
         self.triangle_soup()
             .iter()
@@ -166,6 +225,11 @@ impl TriMesh {
     }
 
     /// Converts into a [`Polyhedron`] (for inside tests).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Invalid`] if a triangle references a missing vertex
+    /// or a vertex is not finite.
     pub fn to_polyhedron(&self) -> Result<Polyhedron> {
         Polyhedron::new(
             self.vertices.clone(),
@@ -321,7 +385,16 @@ fn signed_area(v: &[(f64, f64)]) -> f64 {
 }
 
 /// Ear-clipping triangulation of a simple polygon given counter-clockwise.
-/// Returns triangles (CCW) as indices into `v`.
+/// Returns triangles (CCW) as indices into `v`; concave polygons are
+/// supported.
+///
+/// ```
+/// use csx::tessellate::triangulate_polygon;
+///
+/// // An L shape: 6 vertices → 4 triangles.
+/// let l = [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (0.0, 2.0)];
+/// assert_eq!(triangulate_polygon(&l).len(), 4);
+/// ```
 #[must_use]
 pub fn triangulate_polygon(v: &[(f64, f64)]) -> Vec<[usize; 3]> {
     let n = v.len();
@@ -654,7 +727,23 @@ pub struct TessellatedPrimitive {
     pub polyline: Vec<Vec3>,
 }
 
-/// Tessellates every primitive of properties matching `mask`.
+/// Tessellates every primitive of properties matching `mask`, in property
+/// and primitive order.
+///
+/// ```
+/// use csx::primitives::{BoxShape, Curve};
+/// use csx::tessellate::{TessellationOptions, tessellate_structure};
+/// use csx::{ContinuousStructure, Property, TypeMask};
+///
+/// let mut s = ContinuousStructure::new();
+/// let m = s.add_property(Property::metal("m"));
+/// s.add_primitive(m, BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]))?;
+/// s.add_primitive(m, Curve::new([[0.0, 0.0, 2.0], [1.0, 0.0, 2.0]]))?;
+/// let parts = tessellate_structure(&s, TypeMask::ANY, &TessellationOptions::default());
+/// assert_eq!(parts[0].mesh.triangles.len(), 12);
+/// assert_eq!(parts[1].polyline.len(), 2);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[must_use]
 pub fn tessellate_structure(
     s: &ContinuousStructure,

@@ -7,6 +7,36 @@
 //! set and properties; every property carries an `ID`, a `Name`, fill and
 //! edge colours and its primitives.
 //!
+//! ```
+//! use csx::primitives::BoxShape;
+//! use csx::properties::Material;
+//! use csx::{ContinuousStructure, Property};
+//!
+//! let mut s = ContinuousStructure::new();
+//! s.parameters.set("h", 1.6);
+//! let fr4 = s.add_property(Property::material("FR4", Material::new(4.3, 0.0)));
+//! s.add_primitive(fr4, BoxShape {
+//!     start: [0.0, 0.0, 0.0].into(),
+//!     stop: ["10", "10", "h"].into(), // parametric corner
+//! })?;
+//! s.update()?;
+//!
+//! let xml = s.to_xml_string();
+//! assert!(xml.contains(r#"Z="h""#)); // expressions are kept
+//! let back = ContinuousStructure::from_xml_str(&xml)?;
+//! assert_eq!(back, s);
+//! # Ok::<(), csx::Error>(())
+//! ```
+//!
+//! # Round-trip guarantees
+//!
+//! Reading a file and writing it back preserves the model: parametric
+//! expressions, parameters, unknown attributes and unknown child elements
+//! survive, and writing the re-read model produces identical text. Numbers
+//! are written in their shortest round-tripping form, so the text may differ
+//! from the original file's formatting (e.g. `1.000000e+00` becomes `1`),
+//! and properties are renumbered (`ID`) in document order.
+//!
 //! Unknown attributes of properties, primitives and the structure are kept
 //! in `extra_attributes`, and unknown child elements in `extra_elements`
 //! (as [`dom::Element`] trees); both are written back. Unknown children are
@@ -63,6 +93,21 @@ use crate::structure::ContinuousStructure;
 /// A complete openEMS simulation description: the FDTD settings (kept as raw
 /// XML, with typed access through [`OpenEmsDocument::fdtd_settings`]) and
 /// the structure.
+///
+/// ```
+/// use csx::OpenEmsDocument;
+/// use csx::fdtd::FdtdSettings;
+///
+/// let mut doc = OpenEmsDocument::default();
+/// doc.set_fdtd_settings(&FdtdSettings::gaussian(1e9, 0.5e9));
+/// let xml = doc.to_xml_string();
+/// assert!(xml.contains("<openEMS>"));
+///
+/// let back = OpenEmsDocument::from_xml_str(&xml)?;
+/// let fdtd = back.fdtd_settings()?.expect("has <FDTD>");
+/// assert_eq!(fdtd.f_max, Some(1.5e9));
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct OpenEmsDocument {
     /// The `<FDTD>` element, if present.
@@ -76,6 +121,12 @@ pub struct OpenEmsDocument {
 impl OpenEmsDocument {
     /// Parses a document. A bare `<ContinuousStructure>` root yields a
     /// document without FDTD settings.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`] for malformed XML, an unexpected root element or
+    /// invalid model content; [`Error::Parse`] / [`Error::UnknownVariable`]
+    /// for invalid expressions; [`Error::Invalid`] for invalid values.
     pub fn from_xml_str(xml: &str) -> Result<Self> {
         let root = dom::parse(xml)?;
         match root.name.as_str() {
@@ -104,6 +155,11 @@ impl OpenEmsDocument {
 
     /// Typed view of the `<FDTD>` element; `Ok(None)` when the document has
     /// no FDTD settings.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`] for invalid FDTD attributes (unknown boundary or
+    /// signal types, malformed numbers).
     pub fn fdtd_settings(&self) -> Result<Option<FdtdSettings>> {
         self.fdtd
             .as_ref()
@@ -136,7 +192,12 @@ impl OpenEmsDocument {
     }
 
     /// Reads a file; the structure's `base_dir` is set to the file's
-    /// directory.
+    /// directory. Files that are not valid UTF-8 are decoded as Latin-1.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file cannot be read, otherwise as
+    /// [`OpenEmsDocument::from_xml_str`].
     pub fn read_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let mut doc = Self::from_xml_str(&read_text(path)?)?;
@@ -145,6 +206,10 @@ impl OpenEmsDocument {
     }
 
     /// Writes the document to a file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file cannot be written.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
         std::fs::write(path, self.to_xml_string())?;
         Ok(())
@@ -169,6 +234,10 @@ impl ContinuousStructure {
     /// `<ContinuousStructure>` or `<openEMS>` (whose structure is used).
     /// Parametric values are evaluated; external mesh files are not loaded
     /// until [`ContinuousStructure::update`] is called.
+    ///
+    /// # Errors
+    ///
+    /// As [`OpenEmsDocument::from_xml_str`].
     pub fn from_xml_str(xml: &str) -> Result<Self> {
         Ok(OpenEmsDocument::from_xml_str(xml)?.structure)
     }
@@ -186,17 +255,29 @@ impl ContinuousStructure {
     }
 
     /// Builds a structure from a `<ContinuousStructure>` element.
+    ///
+    /// # Errors
+    ///
+    /// As [`OpenEmsDocument::from_xml_str`].
     pub fn from_xml_element(el: &Element) -> Result<Self> {
         load_structure(el)
     }
 
     /// Reads a structure from a file; `base_dir` is set to the file's
     /// directory.
+    ///
+    /// # Errors
+    ///
+    /// As [`OpenEmsDocument::read_file`].
     pub fn read_file(path: impl AsRef<Path>) -> Result<Self> {
         Ok(OpenEmsDocument::read_file(path)?.structure)
     }
 
     /// Writes the structure to a file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file cannot be written.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
         std::fs::write(path, self.to_xml_string())?;
         Ok(())

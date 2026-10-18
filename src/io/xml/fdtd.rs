@@ -45,6 +45,29 @@ fn to_u32(v: Option<i64>, what: &str) -> Result<Option<u32>> {
 
 impl FdtdSettings {
     /// Parses an `<FDTD>` element.
+    ///
+    /// ```
+    /// use csx::fdtd::{Boundary, FdtdSettings};
+    /// use csx::io::dom::parse;
+    ///
+    /// let el = parse(r#"<FDTD NumberOfTimesteps="30000" endCriteria="1e-5">
+    ///     <Excitation Type="0" f0="2e9" fc="1e9"/>
+    ///     <BoundaryCond xmin="PML_8" xmax="PML 8" ymin="MUR" ymax="1" zmin="PEC" zmax="0"/>
+    /// </FDTD>"#)?;
+    /// let f = FdtdSettings::from_xml_element(&el)?;
+    /// assert_eq!(f.number_of_timesteps, Some(30000));
+    /// let bc = f.boundary.as_ref().unwrap();
+    /// assert_eq!(bc.faces[1], Boundary::Pml(8));
+    /// assert_eq!(bc.faces[3], Boundary::Pmc);
+    /// // Unset attributes stay unset when written back.
+    /// assert!(f.to_xml_element().attr("OverSampling").is_none());
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`] for malformed numbers, out-of-range integers,
+    /// unknown excitation types or boundary conditions.
     pub fn from_xml_element(el: &Element) -> Result<Self> {
         let a = Attrs::new(el);
         let mut s = FdtdSettings {

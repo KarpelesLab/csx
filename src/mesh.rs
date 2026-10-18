@@ -14,7 +14,42 @@
 //! Optionally the *thirds rule* is applied to metal edges: instead of a line
 //! exactly on the edge of a metal sheet (where the field is singular), one
 //! line is placed `d/3` inside the metal and one `2d/3` outside, where `d` is
-//! the local resolution.
+//! the local resolution. It applies to box primitives of `Metal` and
+//! `ConductingSheet` properties, along the axes where they have extent; an
+//! edge that also bounds a material keeps its line.
+//!
+//! ```text
+//!         metal │ air
+//!   ────────┼───┼──────┼────   thirds rule with resolution d:
+//!           │ d/3  2d/3│        lines at edge − d/3 and edge + 2d/3
+//! ```
+//!
+//! # Example
+//!
+//! ```
+//! use csx::mesh::{MeshBuilder, MeshOptions, detect_edges};
+//! use csx::primitives::BoxShape;
+//! use csx::properties::Material;
+//! use csx::{ContinuousStructure, CoordSystem, Property, TypeMask};
+//!
+//! let mut s = ContinuousStructure::new();
+//! let sub = s.add_property(Property::material("FR4", Material::new(4.3, 0.0)));
+//! s.add_primitive(sub, BoxShape::new([-10.0, -10.0, 0.0], [10.0, 10.0, 1.6]))?;
+//! let strip = s.add_property(Property::metal("strip"));
+//! s.add_primitive(strip, BoxShape::new([-10.0, -1.5, 1.6], [10.0, 1.5, 1.6]))?;
+//!
+//! // Fixed lines straight from the geometry.
+//! let edges = detect_edges(&s, TypeMask::ANY, CoordSystem::Cartesian);
+//! assert_eq!(edges[2], vec![0.0, 1.6]);
+//!
+//! // A smoothed grid: cells ≤ 1 unit, growth ≤ 1.4, 5 units of air around.
+//! let opts = MeshOptions::new(1.0).with_ratio(1.4).with_margin(5.0);
+//! MeshBuilder::new(opts).with_lines(2, [0.8]).apply(&mut s)?;
+//! let (_, largest) = s.grid.cell_size_range(0).unwrap();
+//! assert!(largest <= 1.0 + 1e-9);
+//! assert_eq!(s.grid.lines(0).first(), Some(&-15.0));
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use crate::coords::CoordSystem;
 use crate::error::{Error, Result};
@@ -106,6 +141,27 @@ impl MeshOptions {
 /// Collects candidate mesh lines from all primitives of properties matching
 /// `mask`, expressed in the coordinate system `cs` (`ρ, α, z` lines for
 /// cylindrical meshes). The result is sorted and de-duplicated.
+///
+/// Every primitive contributes the bounds of its bounding box in `cs`;
+/// untransformed (or only translated / scaled) primitives also contribute
+/// exact interior points: box corners, polygon vertices and elevations,
+/// curve and wire vertices, sphere centres and cylinder axis end points.
+/// Rotated primitives contribute their bounding box only. A full revolution
+/// adds no angular lines.
+///
+/// ```
+/// use csx::mesh::detect_edges;
+/// use csx::primitives::{BoxShape, Sphere};
+/// use csx::{ContinuousStructure, CoordSystem, Property, TypeMask};
+///
+/// let mut s = ContinuousStructure::new();
+/// let m = s.add_property(Property::metal("m"));
+/// s.add_primitive(m, BoxShape::new([0.0, 0.0, 0.0], [2.0, 1.0, 1.0]))?;
+/// s.add_primitive(m, Sphere::new([5.0, 0.0, 0.0], 1.0))?;
+/// let l = detect_edges(&s, TypeMask::ANY, CoordSystem::Cartesian);
+/// assert_eq!(l[0], vec![0.0, 2.0, 4.0, 5.0, 6.0]);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[must_use]
 pub fn detect_edges(
     s: &ContinuousStructure,
@@ -290,7 +346,8 @@ fn merge_close(v: &[f64], min: f64, keep: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Builds a [`RectilinearGrid`] for a structure.
+/// Builds a [`RectilinearGrid`] for a structure; see the
+/// [module documentation](self) for an example.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshBuilder {
     /// Options.
@@ -307,7 +364,12 @@ impl MeshBuilder {
         }
     }
 
-    /// Adds user-defined fixed lines along `dir`.
+    /// Adds user-defined fixed lines along `dir`. They are always kept, also
+    /// when merging lines closer than the minimum resolution.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `dir > 2`.
     #[must_use]
     pub fn with_lines(mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Self {
         self.extra[dir].extend(lines);
@@ -315,7 +377,12 @@ impl MeshBuilder {
     }
 
     /// Fixed lines (before smoothing) for the structure, in the structure's
-    /// coordinate system.
+    /// coordinate system: detected edges (with the thirds rule applied),
+    /// user lines, margins and minimum-resolution merging.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; the `Result` is reserved for future checks.
     pub fn fixed_lines(&self, s: &ContinuousStructure) -> Result<[Vec<f64>; 3]> {
         let o = &self.options;
         let cs = s.coord_system;
@@ -373,6 +440,11 @@ impl MeshBuilder {
 
     /// Generates the grid: fixed lines, merged and padded, then smoothed.
     /// The grid takes the structure's coordinate system and delta unit.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if a maximum resolution is not positive, or if
+    /// smoothing fails (invalid ratio, too many lines).
     pub fn build(&self, s: &ContinuousStructure) -> Result<RectilinearGrid> {
         let o = &self.options;
         if o.max_res.iter().any(|r| r.is_nan() || *r <= 0.0) {
@@ -392,6 +464,10 @@ impl MeshBuilder {
     }
 
     /// Builds the grid and stores it in the structure.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`MeshBuilder::build`]; the structure is unchanged on error.
     pub fn apply(&self, s: &mut ContinuousStructure) -> Result<()> {
         s.grid = self.build(s)?;
         Ok(())

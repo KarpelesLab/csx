@@ -1,4 +1,28 @@
 //! Mesh export: STL, PLY and legacy VTK.
+//!
+//! The writers take [`TriMesh`]es produced by [`crate::tessellate`];
+//! [`vtk_ascii`] exports a whole structure in one file with the owning
+//! property of every cell, ready for `ParaView`.
+//!
+//! ```
+//! use csx::io::export::{VtkOptions, ply_ascii, stl_binary, vtk_ascii};
+//! use csx::primitives::{BoxShape, Primitive};
+//! use csx::tessellate::{TessellationOptions, tessellate};
+//! use csx::{ContinuousStructure, CoordSystem, Property};
+//!
+//! let mut s = ContinuousStructure::new();
+//! let m = s.add_property(Property::metal("plate"));
+//! s.add_primitive(m, BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 0.1]))?;
+//!
+//! let mesh = tessellate(&s.properties()[0].primitives[0], CoordSystem::Cartesian,
+//!                       &TessellationOptions::default());
+//! assert_eq!(stl_binary(&mesh).len(), 84 + 50 * mesh.triangles.len());
+//! assert!(ply_ascii(&mesh).starts_with("ply\n"));
+//!
+//! let vtk = vtk_ascii(&s, &VtkOptions::default().with_scale(1e-3));
+//! assert!(vtk.contains("POLYGONS"));
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use core::fmt::Write as _;
 
@@ -7,13 +31,24 @@ use crate::properties::TypeMask;
 use crate::structure::ContinuousStructure;
 use crate::tessellate::{TessellationOptions, TriMesh, tessellate_structure};
 
-/// Binary STL of a mesh.
+/// Binary STL of a mesh (coordinates rounded to `f32`).
+///
+/// # Panics
+///
+/// Panics if a triangle references a missing vertex (see
+/// [`TriMesh::triangle_soup`]).
 #[must_use]
 pub fn stl_binary(mesh: &TriMesh) -> Vec<u8> {
     super::stl::write_binary(&mesh.triangle_soup())
 }
 
-/// ASCII STL of a mesh; `name` is written after `solid`.
+/// ASCII STL of a mesh; `name` (without control characters) is written
+/// after `solid`.
+///
+/// # Panics
+///
+/// Panics if a triangle references a missing vertex (see
+/// [`TriMesh::triangle_soup`]).
 #[must_use]
 pub fn stl_ascii(mesh: &TriMesh, name: &str) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();

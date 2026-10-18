@@ -10,6 +10,20 @@
 //! uses [`Element`] to keep unknown XML content of properties, primitives
 //! and structures so it survives a read/write round-trip. The `xml` feature
 //! adds the CSXCAD/openEMS reader and writer on top of it.
+//!
+//! ```
+//! use csx::io::dom::{Element, parse};
+//!
+//! let root = parse(r#"<?xml version="1.0"?><a x="1"><b>t &amp; u</b><b/></a>"#)?;
+//! assert_eq!(root.attr("x"), Some("1"));
+//! assert_eq!(root.child("b").unwrap().text(), "t & u");
+//! assert_eq!(root.children_named("b").count(), 2);
+//!
+//! let mut e = Element::new("Box").with_attr("Priority", "10");
+//! e.push(Element::new("P1").with_attr("X", "0"));
+//! assert!(e.to_xml().contains(r#"<P1 X="0" />"#));
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use core::fmt::Write as _;
 
@@ -198,6 +212,12 @@ pub fn is_valid_name(name: &str) -> bool {
 }
 
 /// Parses a document and returns its root element.
+///
+/// # Errors
+///
+/// [`crate::Error::Format`] (with line and column) for malformed XML:
+/// unbalanced or mismatched tags, bad attributes, unknown entities, missing
+/// root element or trailing content.
 pub fn parse(src: &str) -> Result<Element> {
     let mut p = Parser {
         s: src.as_bytes(),

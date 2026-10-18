@@ -1,4 +1,23 @@
 //! STL mesh reader (ASCII and binary).
+//!
+//! The format is detected automatically: data whose length matches the
+//! triangle count of the binary header is binary, otherwise text starting
+//! with `solid` is ASCII.
+//!
+//! ```
+//! use csx::Vec3;
+//! use csx::io::stl;
+//!
+//! // A tetrahedron, written as binary STL and read back.
+//! let v = [Vec3::ZERO, Vec3::unit(0), Vec3::unit(1), Vec3::unit(2)];
+//! let tris = [[v[0], v[2], v[1]], [v[0], v[1], v[3]], [v[0], v[3], v[2]], [v[1], v[2], v[3]]];
+//! let data = stl::write_binary(&tris);
+//! let poly = stl::parse(&data)?;
+//! assert_eq!(poly.vertices().len(), 4);
+//! assert!(poly.is_closed());
+//! assert!(poly.contains(Vec3::new(0.1, 0.1, 0.1)));
+//! # Ok::<(), csx::Error>(())
+//! ```
 
 use crate::error::{Error, Result};
 use crate::math::Vec3;
@@ -6,11 +25,21 @@ use crate::primitives::Polyhedron;
 
 /// Parses STL data (binary or ASCII) into a polyhedron, merging coincident
 /// vertices.
+///
+/// # Errors
+///
+/// [`Error::Format`] for truncated or malformed data, [`Error::Invalid`] if
+/// the triangles do not form a valid polyhedron (non-finite coordinates).
 pub fn parse(data: &[u8]) -> Result<Polyhedron> {
     Polyhedron::from_triangles(&parse_triangles(data)?)
 }
 
-/// Parses STL data into a list of triangles.
+/// Parses STL data into a list of triangles (no vertex merging).
+///
+/// # Errors
+///
+/// [`Error::Format`] for truncated binary data, non-UTF-8 or malformed
+/// ASCII data, or facets with fewer than three vertices.
 pub fn parse_triangles(data: &[u8]) -> Result<Vec<[Vec3; 3]>> {
     if is_binary(data) {
         parse_binary(data)
@@ -94,7 +123,8 @@ fn parse_ascii(data: &[u8]) -> Result<Vec<[Vec3; 3]>> {
     Ok(tris)
 }
 
-/// Serialises triangles as binary STL.
+/// Serialises triangles as binary STL (normals computed from the vertex
+/// order, coordinates rounded to `f32`).
 #[must_use]
 pub fn write_binary(tris: &[[Vec3; 3]]) -> Vec<u8> {
     let mut out = vec![0u8; 80];
