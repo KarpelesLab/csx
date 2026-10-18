@@ -1,5 +1,10 @@
 # csx
 
+[![CI](https://github.com/KarpelesLab/csx/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/csx/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/csx.svg)](https://crates.io/crates/csx)
+[![docs.rs](https://img.shields.io/docsrs/csx)](https://docs.rs/csx)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A pure Rust library for continuous-structure geometry and material modeling,
 compatible with [CSXCAD](https://openems.de) and openEMS.
 

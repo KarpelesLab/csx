@@ -4,7 +4,10 @@
 //! with CSXCAD and openEMS. See `PLAN.md` for the roadmap.
 
 pub mod coords;
+pub mod error;
+pub mod expr;
 pub mod math;
 
 pub use coords::CoordSystem;
+pub use error::{Error, Result};
 pub use math::{BoundingBox, Mat4, Vec3};

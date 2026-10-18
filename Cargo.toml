@@ -7,6 +7,7 @@ license = "MIT"
 description = "Pure Rust continuous-structure geometry and material modeling, compatible with CSXCAD and openEMS"
 repository = "https://github.com/KarpelesLab/csx"
 readme = "README.md"
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 keywords = ["csxcad", "openems", "geometry", "fdtd", "electromagnetics"]
 categories = ["science", "simulation", "mathematics"]
 
