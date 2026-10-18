@@ -6,7 +6,7 @@
 //! ```
 
 use csx::fdtd::FdtdSettings;
-use csx::io::export::{VtkOptions, export_vtk};
+use csx::io::export::{VtkOptions, vtk_ascii};
 use csx::mesh::{MeshBuilder, MeshOptions};
 use csx::primitives::BoxShape;
 use csx::properties::{DumpBox, Excitation, LumpedElement, Material, ProbeBox, Rgba};
@@ -148,7 +148,7 @@ fn build() -> csx::Result<ContinuousStructure> {
             .with_margin(30.0)
             .with_mask(TypeMask::PHYSICAL),
     )
-    .add_lines(2, [0.508, 1.016])
+    .with_lines(2, [0.508, 1.016])
     .apply(&mut s)?;
     Ok(s)
 }
@@ -165,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         structure,
         ..Default::default()
     };
-    doc.set_fdtd_settings(&FdtdSettings::with_defaults(2.0e9, 1.0e9));
+    doc.set_fdtd_settings(&FdtdSettings::gaussian(2.0e9, 1.0e9));
     doc.write_file(&out)?;
     println!("wrote {}", out.display());
 
@@ -189,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(vtk) = args.next() {
-        std::fs::write(&vtk, export_vtk(s, &VtkOptions::default()))?;
+        std::fs::write(&vtk, vtk_ascii(s, &VtkOptions::default()))?;
         println!("wrote {vtk}");
     }
     Ok(())

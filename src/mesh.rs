@@ -300,7 +300,7 @@ impl MeshBuilder {
     }
 
     /// Adds user-defined fixed lines along `dir`.
-    pub fn add_lines(mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Self {
+    pub fn with_lines(mut self, dir: usize, lines: impl IntoIterator<Item = f64>) -> Self {
         self.extra[dir].extend(lines);
         self
     }
@@ -478,7 +478,7 @@ mod tests {
     fn merging_and_user_lines() {
         let s = microstrip();
         let b =
-            MeshBuilder::new(MeshOptions::new(1.0).with_min_res([0.05; 3])).add_lines(1, [0.52]);
+            MeshBuilder::new(MeshOptions::new(1.0).with_min_res([0.05; 3])).with_lines(1, [0.52]);
         let f = b.fixed_lines(&s).unwrap();
         assert!(has(&f[1], 0.52) && !has(&f[1], 0.5));
     }

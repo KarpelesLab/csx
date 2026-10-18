@@ -43,7 +43,8 @@ impl PolyVertices {
     }
 
     /// Vertices from parametric coordinates.
-    pub fn from_scalars(points: Vec<[Scalar; 2]>) -> Self {
+    pub fn from_scalars(points: impl IntoIterator<Item = [Scalar; 2]>) -> Self {
+        let points: Vec<[Scalar; 2]> = points.into_iter().collect();
         let values = points.iter().map(|[a, b]| (a.value(), b.value())).collect();
         PolyVertices { points, values }
     }
@@ -116,7 +117,7 @@ impl From<Vec<(f64, f64)>> for PolyVertices {
 
 impl FromIterator<[Scalar; 2]> for PolyVertices {
     fn from_iter<I: IntoIterator<Item = [Scalar; 2]>>(it: I) -> Self {
-        PolyVertices::from_scalars(it.into_iter().collect())
+        PolyVertices::from_scalars(it)
     }
 }
 

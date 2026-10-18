@@ -5,7 +5,7 @@
 //! cargo run --example export_vtk -- model.xml out_dir
 //! ```
 
-use csx::io::export::{VtkOptions, export_vtk, stl_binary};
+use csx::io::export::{VtkOptions, stl_binary, vtk_ascii};
 use csx::tessellate::{TessellationOptions, TriMesh, tessellate_structure};
 use csx::{ContinuousStructure, TypeMask};
 
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let s = ContinuousStructure::read_file(&input)?;
     let vtk = out.join("geometry.vtk");
-    std::fs::write(&vtk, export_vtk(&s, &VtkOptions::default()))?;
+    std::fs::write(&vtk, vtk_ascii(&s, &VtkOptions::default()))?;
     println!("wrote {}", vtk.display());
 
     let parts = tessellate_structure(&s, TypeMask::ANY, &TessellationOptions::default());

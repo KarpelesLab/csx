@@ -3,7 +3,7 @@
 
 use csx::discretize::{DiscretizeOptions, discretize};
 use csx::fdtd::{Boundary, ExcitationSignal, FdtdSettings};
-use csx::io::export::{VtkOptions, export_vtk, ply_ascii, stl_binary};
+use csx::io::export::{VtkOptions, ply_ascii, stl_binary, vtk_ascii};
 use csx::mesh::{MeshBuilder, MeshOptions, detect_edges};
 use csx::primitives::{BoxShape, Cylinder, Sphere, Wire};
 use csx::properties::{Excitation, LumpedElement, Material, MaterialQuantity, ProbeBox};
@@ -146,7 +146,7 @@ fn full_pipeline() {
         structure: s.clone(),
         ..Default::default()
     };
-    let fdtd = FdtdSettings::with_defaults(5e9, 4e9);
+    let fdtd = FdtdSettings::gaussian(5e9, 4e9);
     doc.set_fdtd_settings(&fdtd);
     let xml = doc.to_xml_string();
     let back = OpenEmsDocument::from_xml_str(&xml).unwrap();
@@ -168,7 +168,7 @@ fn full_pipeline() {
     let reread = csx::io::stl::parse(&stl).unwrap();
     assert!(reread.is_closed());
     assert!(ply_ascii(sub).starts_with("ply"));
-    let vtk = export_vtk(&s, &VtkOptions::default());
+    let vtk = vtk_ascii(&s, &VtkOptions::default());
     assert!(vtk.contains("POLYDATA") && vtk.contains("property_index"));
 }
 
@@ -264,7 +264,7 @@ fn cylindrical_model() {
     // Full revolutions contribute no angular lines; give the angular range
     // explicitly.
     MeshBuilder::new(MeshOptions::new(0.5).with_max_res([0.5, 2.0 * pi / 16.0, 1.0]))
-        .add_lines(1, [-pi, pi])
+        .with_lines(1, [-pi, pi])
         .apply(&mut s)
         .unwrap();
     assert_eq!(s.grid.coord_system, CoordSystem::Cylindrical);
@@ -532,7 +532,7 @@ fn every_type_from_fixture() {
     // Every closed solid tessellates to a closed mesh; nothing panics.
     let parts = tessellate_structure(s, TypeMask::ANY, &TessellationOptions::default());
     assert_eq!(parts.len(), s.primitives().count());
-    let vtk = export_vtk(s, &VtkOptions::default());
+    let vtk = vtk_ascii(s, &VtkOptions::default());
     assert!(vtk.contains("LINES") && vtk.contains("POLYGONS"));
     for (p, (prop, prim)) in parts.iter().zip(s.primitives()) {
         if prim.dimension() == 3 && !matches!(prim.shape, Shape::UserDefined(_) | Shape::Wire(_)) {

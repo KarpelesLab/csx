@@ -350,7 +350,7 @@ impl ContinuousStructure {
     }
 
     /// Builds an index for fast repeated point queries.
-    pub fn index(&self, cs: CoordSystem, mask: impl Into<TypeMask>) -> SpatialIndex<'_> {
+    pub fn spatial_index(&self, cs: CoordSystem, mask: impl Into<TypeMask>) -> SpatialIndex<'_> {
         SpatialIndex::new(self, cs, mask.into())
     }
 
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(hit.property.name, "A");
         let all = s.properties_at(p, CoordSystem::Cartesian, TypeMask::ANY);
         assert_eq!(all[0].property.name, "A");
-        let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+        let idx = s.spatial_index(CoordSystem::Cartesian, TypeMask::ANY);
         assert_eq!(idx.query(p).unwrap().property.name, "A");
     }
 
@@ -553,7 +553,7 @@ mod tests {
             .len(),
             2
         );
-        let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+        let idx = s.spatial_index(CoordSystem::Cartesian, TypeMask::ANY);
         for p in [
             Vec3::new(5.0, 5.0, 0.8),
             Vec3::new(1.0, 1.0, 0.5),
@@ -661,7 +661,7 @@ mod tests {
             Primitive::new(UserDefined::new("z > 15")).with_priority(2),
         )
         .unwrap();
-        let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+        let idx = s.spatial_index(CoordSystem::Cartesian, TypeMask::ANY);
         for _ in 0..5000 {
             let p = Vec3::new(rnd() * 22.0 - 1.0, rnd() * 22.0 - 1.0, rnd() * 22.0 - 1.0);
             let a = idx.query(p);

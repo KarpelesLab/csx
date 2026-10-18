@@ -2,7 +2,7 @@
 //! boundary conditions (the `<FDTD>` element of an openEMS file).
 //!
 //! Every setting is optional so that files only carrying a subset of the
-//! attributes are written back unchanged; [`FdtdSettings::with_defaults`]
+//! attributes are written back unchanged; [`FdtdSettings::gaussian`]
 //! gives a complete set of commonly used values. With the `xml` feature,
 //! [`FdtdSettings::from_xml_element`] and [`FdtdSettings::to_xml_element`]
 //! convert from / to the XML representation.
@@ -56,7 +56,7 @@ const LN_10: f64 = core::f64::consts::LN_10;
 
 impl ExcitationSignal {
     /// Numeric type id used in files.
-    pub fn type_id(&self) -> i32 {
+    pub fn id(&self) -> i32 {
         match self {
             ExcitationSignal::Gaussian { .. } => 0,
             ExcitationSignal::Sinus { .. } => 1,
@@ -192,9 +192,7 @@ pub enum Boundary {
 }
 
 impl Boundary {
-    /// Parses `PEC`, `PMC`, `MUR`, `PML_n` (also `PML n`, `PML-n`, `PML`)
-    /// or the numeric forms `0`–`3` (case-insensitive).
-    pub fn parse(s: &str) -> Option<Boundary> {
+    fn parse_opt(s: &str) -> Option<Boundary> {
         let t = s.trim().to_ascii_uppercase();
         match t.as_str() {
             "PEC" | "0" => return Some(Boundary::Pec),
@@ -206,14 +204,27 @@ impl Boundary {
         let rest = t.strip_prefix("PML")?.trim_start_matches(['_', ' ', '-']);
         rest.parse().ok().map(Boundary::Pml)
     }
+}
 
-    /// Textual form used when writing files.
-    pub fn to_text(self) -> String {
+impl core::str::FromStr for Boundary {
+    type Err = Error;
+
+    /// Parses `PEC`, `PMC`, `MUR`, `PML_n` (also `PML n`, `PML-n`, `PML`)
+    /// or the numeric forms `0`–`3` (case-insensitive).
+    fn from_str(s: &str) -> Result<Boundary> {
+        Boundary::parse_opt(s)
+            .ok_or_else(|| Error::Format(format!("unknown boundary condition {s:?}")))
+    }
+}
+
+impl core::fmt::Display for Boundary {
+    /// The textual form used in files (`PEC`, `PMC`, `MUR`, `PML_n`).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Boundary::Pec => "PEC".into(),
-            Boundary::Pmc => "PMC".into(),
-            Boundary::Mur => "MUR".into(),
-            Boundary::Pml(n) => format!("PML_{n}"),
+            Boundary::Pec => f.write_str("PEC"),
+            Boundary::Pmc => f.write_str("PMC"),
+            Boundary::Mur => f.write_str("MUR"),
+            Boundary::Pml(n) => write!(f, "PML_{n}"),
         }
     }
 }
@@ -288,9 +299,10 @@ impl FdtdSettings {
         Self::default()
     }
 
-    /// Typical settings: 10⁹ time steps, −50 dB end criterion, a Gaussian
-    /// pulse and 8-cell PML on all faces.
-    pub fn with_defaults(f0: f64, fc: f64) -> Self {
+    /// Typical settings for a Gaussian pulse excitation (centre `f0`, 20 dB
+    /// half bandwidth `fc`): 10⁹ time steps, −50 dB end criterion and 8-cell
+    /// PML on all faces.
+    pub fn gaussian(f0: f64, fc: f64) -> Self {
         FdtdSettings {
             number_of_timesteps: Some(1_000_000_000),
             end_criteria: Some(1e-5),
@@ -368,16 +380,16 @@ mod tests {
 
     #[test]
     fn boundaries() {
-        assert_eq!(Boundary::parse("PML_8"), Some(Boundary::Pml(8)));
-        assert_eq!(Boundary::parse("PML 12"), Some(Boundary::Pml(12)));
-        assert_eq!(Boundary::parse("pml"), Some(Boundary::Pml(8)));
-        assert_eq!(Boundary::parse("1"), Some(Boundary::Pmc));
-        assert_eq!(Boundary::parse("3"), Some(Boundary::Pml(8)));
-        assert_eq!(Boundary::parse(" MUR "), Some(Boundary::Mur));
-        assert_eq!(Boundary::parse("PEC"), Some(Boundary::Pec));
-        assert_eq!(Boundary::parse("PML_x"), None);
-        assert_eq!(Boundary::parse("foo"), None);
-        assert_eq!(Boundary::Pml(16).to_text(), "PML_16");
+        assert_eq!("PML_8".parse::<Boundary>().ok(), Some(Boundary::Pml(8)));
+        assert_eq!("PML 12".parse::<Boundary>().ok(), Some(Boundary::Pml(12)));
+        assert_eq!("pml".parse::<Boundary>().ok(), Some(Boundary::Pml(8)));
+        assert_eq!("1".parse::<Boundary>().ok(), Some(Boundary::Pmc));
+        assert_eq!("3".parse::<Boundary>().ok(), Some(Boundary::Pml(8)));
+        assert_eq!(" MUR ".parse::<Boundary>().ok(), Some(Boundary::Mur));
+        assert_eq!("PEC".parse::<Boundary>().ok(), Some(Boundary::Pec));
+        assert_eq!("PML_x".parse::<Boundary>().ok(), None);
+        assert_eq!("foo".parse::<Boundary>().ok(), None);
+        assert_eq!(Boundary::Pml(16).to_string(), "PML_16");
     }
 
     #[test]
@@ -391,7 +403,7 @@ mod tests {
         assert!(g.eval(0.0).abs() <= 1.0001e-6);
         assert!(g.eval(g.duration().unwrap()).abs() <= 1.0001e-6);
         assert_eq!(g.max_frequency(), 1.5e9);
-        assert_eq!(g.type_id(), 0);
+        assert_eq!(g.id(), 0);
     }
 
     #[test]
@@ -418,7 +430,7 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(FdtdSettings::with_defaults(1e9, 5e8).validate().is_ok());
+        assert!(FdtdSettings::gaussian(1e9, 5e8).validate().is_ok());
         let mut s = FdtdSettings::new();
         s.excitation = Some(ExcitationSignal::Gaussian { f0: 1e9, fc: 0.0 });
         assert!(s.validate().is_err());

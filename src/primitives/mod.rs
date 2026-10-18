@@ -78,19 +78,35 @@ impl MeshFileType {
         }
     }
 
-    /// Parses a numeric id or a file type name.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "1" | "stl" => Some(MeshFileType::Stl),
-            "2" | "ply" => Some(MeshFileType::Ply),
-            _ => None,
-        }
-    }
-
     /// Guesses the type from a file name extension.
     pub fn from_path(path: &str) -> Option<Self> {
-        let ext = path.rsplit('.').next()?;
-        MeshFileType::parse(ext)
+        path.rsplit('.').next()?.parse().ok()
+    }
+}
+
+impl core::str::FromStr for MeshFileType {
+    type Err = crate::Error;
+
+    /// Parses a numeric id (`1`, `2`) or a type name (`STL`, `PLY`, case
+    /// insensitive).
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "1" | "stl" => Ok(MeshFileType::Stl),
+            "2" | "ply" => Ok(MeshFileType::Ply),
+            _ => Err(crate::Error::Format(format!(
+                "unknown mesh file type {s:?}"
+            ))),
+        }
+    }
+}
+
+impl core::fmt::Display for MeshFileType {
+    /// The type name used in files (`STL`, `PLY`).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            MeshFileType::Stl => "STL",
+            MeshFileType::Ply => "PLY",
+        })
     }
 }
 
@@ -334,7 +350,7 @@ impl Shape {
     }
 
     /// Local Cartesian bounding box.
-    pub fn local_bbox(&self, cs: CoordSystem) -> BoundingBox {
+    pub fn local_bounding_box(&self, cs: CoordSystem) -> BoundingBox {
         match self {
             Shape::Box(s) => s.bbox(cs),
             Shape::MultiBox(s) => s.bbox(cs),
@@ -540,7 +556,7 @@ impl Primitive {
 
     /// World-space Cartesian bounding box.
     pub fn bounding_box(&self, default_cs: CoordSystem) -> BoundingBox {
-        let b = self.shape.local_bbox(self.shape_cs(default_cs));
+        let b = self.shape.local_bounding_box(self.shape_cs(default_cs));
         if self.transform.is_empty() || b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
             // Unbounded shapes stay unbounded (transforming infinite corners
             // would produce NaN).

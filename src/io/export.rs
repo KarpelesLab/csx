@@ -47,7 +47,7 @@ pub fn ply_ascii(mesh: &TriMesh) -> String {
     s
 }
 
-/// Options for [`export_vtk`].
+/// Options for [`vtk_ascii`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VtkOptions {
     /// Tessellation resolution.
@@ -74,7 +74,7 @@ impl Default for VtkOptions {
 /// Cell data: `property_index` (index into
 /// [`ContinuousStructure::properties`]) and `priority`; field data lists the
 /// property names (whitespace replaced by `_`) in index order.
-pub fn export_vtk(s: &ContinuousStructure, opts: &VtkOptions) -> String {
+pub fn vtk_ascii(s: &ContinuousStructure, opts: &VtkOptions) -> String {
     let parts = tessellate_structure(s, opts.mask, &opts.tessellation);
     let mut points: Vec<Vec3> = Vec::new();
     let mut lines: Vec<(Vec<u32>, usize, i32)> = Vec::new();
@@ -218,7 +218,7 @@ mod tests {
             Primitive::new(Sphere::new([3.0, 0.0, 0.0], 1.0)).with_priority(4),
         )
         .unwrap();
-        let v = export_vtk(
+        let v = vtk_ascii(
             &s,
             &VtkOptions {
                 scale: 1e-3,
@@ -241,7 +241,7 @@ mod tests {
         assert!(v.contains("pec_plate"));
         // empty structure still valid
         assert!(
-            export_vtk(&ContinuousStructure::new(), &VtkOptions::default())
+            vtk_ascii(&ContinuousStructure::new(), &VtkOptions::default())
                 .contains("POINTS 0 double")
         );
     }

@@ -942,7 +942,7 @@ mod tests {
         assert_eq!(m.bounding_box().min, Vec3::new(5.0, 0.0, 0.0));
         // mirroring keeps outward orientation
         let mut t = Transform::new();
-        t.matrix_op(&Mat4::scaling(Vec3::new(-1.0, 1.0, 1.0)));
+        t.push_matrix(&Mat4::scaling(Vec3::new(-1.0, 1.0, 1.0)));
         let b = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])).with_transform(t);
         assert!(tessellate(&b, CoordSystem::Cartesian, &opts()).signed_volume() > 0.0);
         let mut rot = Transform::new();

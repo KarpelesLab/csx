@@ -112,7 +112,7 @@ fn main() {
         .collect();
 
     let t = Instant::now();
-    let idx = s.index(CoordSystem::Cartesian, TypeMask::ANY);
+    let idx = s.spatial_index(CoordSystem::Cartesian, TypeMask::ANY);
     let build = t.elapsed();
     let t = Instant::now();
     let hits = qs.iter().filter(|&&p| idx.query(p).is_some()).count();

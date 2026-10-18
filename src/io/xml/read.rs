@@ -793,8 +793,7 @@ fn primitive(el: &Element, ps: &ParameterSet) -> Result<Primitive> {
         "PolyhedronReader" => {
             let file_name = a.get("FileName").unwrap_or("").to_owned();
             let file_type = match a.get("FileType") {
-                Some(t) => MeshFileType::parse(t)
-                    .ok_or_else(|| Error::Format(format!("unknown mesh file type {t:?}")))?,
+                Some(t) => t.parse::<MeshFileType>()?,
                 None => MeshFileType::from_path(&file_name).unwrap_or_default(),
             };
             Shape::PolyhedronReader(PolyhedronReader::new(file_name).with_file_type(file_type))

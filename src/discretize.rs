@@ -239,7 +239,7 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
         g: &s.grid,
         cs,
         dims,
-        index: s.index(cs, TypeMask::MATERIALS | TypeMask::of(PropertyType::Metal)),
+        index: s.spatial_index(cs, TypeMask::MATERIALS | TypeMask::of(PropertyType::Metal)),
         bg: [
             s.background.epsilon.value(),
             s.background.mue.value(),

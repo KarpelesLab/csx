@@ -110,7 +110,7 @@ impl FdtdSettings {
             e.set_attr(k.clone(), v.clone());
         }
         if let Some(sig) = &self.excitation {
-            let mut x = Element::new("Excitation").with_attr("Type", sig.type_id().to_string());
+            let mut x = Element::new("Excitation").with_attr("Type", sig.id().to_string());
             match sig {
                 ExcitationSignal::Gaussian { f0, fc } => {
                     x.set_attr("f0", format_f64(*f0));
@@ -131,7 +131,7 @@ impl FdtdSettings {
         if let Some(b) = &self.boundary {
             let mut x = Element::new("BoundaryCond");
             for (name, f) in FACE_NAMES.iter().zip(&b.faces) {
-                x.set_attr(*name, f.to_text());
+                x.set_attr(*name, f.to_string());
             }
             if let Some(v) = b.mur_phase_velocity {
                 x.set_attr("MUR_PhaseVelocity", format_f64(v));
@@ -211,8 +211,9 @@ fn boundary(el: &Element) -> Result<BoundaryConditions> {
     let mut b = BoundaryConditions::default();
     for (i, name) in FACE_NAMES.iter().enumerate() {
         if let Some(v) = a.get(name) {
-            b.faces[i] = Boundary::parse(v)
-                .ok_or_else(|| Error::Format(format!("unknown boundary condition {name}={v:?}")))?;
+            b.faces[i] = v
+                .parse::<Boundary>()
+                .map_err(|_| Error::Format(format!("unknown boundary condition {name}={v:?}")))?;
         }
     }
     b.mur_phase_velocity = opt_number(&a, &["MUR_PhaseVelocity"])?;
@@ -322,7 +323,7 @@ mod tests {
         // a fresh document without raw FDTD element
         let mut doc = OpenEmsDocument::default();
         assert!(doc.fdtd_settings().is_none());
-        doc.set_fdtd_settings(&FdtdSettings::with_defaults(1e9, 5e8));
+        doc.set_fdtd_settings(&FdtdSettings::gaussian(1e9, 5e8));
         let x = doc.to_xml_string();
         assert!(x.contains(r#"xmin="PML_8""#), "{x}");
         assert!(x.contains(r#"NumberOfTimesteps="1000000000""#), "{x}");

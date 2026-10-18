@@ -223,7 +223,7 @@ impl Transform {
     }
 
     /// Appends an arbitrary matrix acting on column vectors (`p' = m·p`).
-    pub fn matrix_op(&mut self, m: &Mat4) -> &mut Self {
+    pub fn push_matrix(&mut self, m: &Mat4) -> &mut Self {
         self.push(TransformOp::Matrix(Box::new(
             m.to_row_major().map(Scalar::new),
         )))
@@ -316,10 +316,10 @@ mod tests {
         assert!((op.to_mat4(false).transform_point(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
         let r = Mat4::rotation(Vec3::unit(2), core::f64::consts::FRAC_PI_2);
         let mut t = Transform::new();
-        t.matrix_op(&r);
+        t.push_matrix(&r);
         assert!((t.apply(Vec3::unit(0)) - Vec3::unit(1)).norm() < 1e-12);
         let mut t2 = Transform::new();
-        t2.matrix_op(&Mat4::translation(Vec3::new(1.0, 2.0, 3.0)));
+        t2.push_matrix(&Mat4::translation(Vec3::new(1.0, 2.0, 3.0)));
         assert_eq!(t2.apply(Vec3::ZERO), Vec3::new(1.0, 2.0, 3.0));
         // Vector scaling is written as `Scale3`; both names are accepted.
         let s3 = TransformOp::from_name_args("Scale3", vec![1.0.into(), 2.0.into(), 3.0.into()])
