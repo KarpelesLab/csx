@@ -38,6 +38,28 @@ const RAY_DIRS: [[f64; 3]; 3] = [
 /// generalised winding number). An open polyhedron is a surface and only
 /// points on it are "inside". A bounding volume hierarchy over the
 /// triangles keeps queries roughly logarithmic in the face count.
+///
+/// The mesh is fixed at construction (fields are private so the acceleration
+/// structure stays valid); build a new polyhedron to change it.
+///
+/// ```
+/// use csx::primitives::{Polyhedron, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // A tetrahedron with outward-facing triangles.
+/// let tetra = Polyhedron::new(
+///     vec![Vec3::ZERO, Vec3::unit(0), Vec3::unit(1), Vec3::unit(2)],
+///     vec![vec![0, 2, 1], vec![0, 1, 3], vec![0, 3, 2], vec![1, 2, 3]],
+/// )?;
+/// assert!(tetra.is_closed());
+/// assert!(tetra.contains(Vec3::new(0.1, 0.1, 0.1)));
+/// assert!(!tetra.contains(Vec3::new(0.5, 0.5, 0.5)));
+///
+/// let p = Primitive::new(tetra);
+/// assert_eq!(p.dimension(), 3);
+/// assert_eq!(p.bounding_box(CoordSystem::Cartesian).max, Vec3::new(1.0, 1.0, 1.0));
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polyhedron {
     vertices: Vec<Vec3>,
@@ -49,7 +71,13 @@ pub struct Polyhedron {
 }
 
 impl Polyhedron {
-    /// Builds a polyhedron, validating face indices.
+    /// Builds a polyhedron from vertices and faces (each a list of at least
+    /// three vertex indices; larger faces are fan-triangulated).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if a face has fewer than three vertices, references
+    /// a vertex that does not exist, or a vertex is not finite.
     pub fn new(vertices: Vec<Vec3>, faces: Vec<Vec<u32>>) -> Result<Self> {
         let nv = vertices.len();
         let mut tris = Vec::new();
@@ -88,7 +116,23 @@ impl Polyhedron {
         })
     }
 
-    /// Builds a polyhedron from a triangle soup, merging identical vertices.
+    /// Builds a polyhedron from a triangle soup (as found in STL files),
+    /// merging bit-identical vertices and dropping degenerate triangles.
+    ///
+    /// ```
+    /// use csx::Vec3;
+    /// use csx::primitives::Polyhedron;
+    ///
+    /// let (o, x, y) = (Vec3::ZERO, Vec3::unit(0), Vec3::unit(1));
+    /// let p = Polyhedron::from_triangles(&[[o, x, y], [o, y, x]])?;
+    /// assert_eq!(p.vertices().len(), 3);
+    /// assert!(p.is_closed()); // two faces sharing every edge
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] if a vertex is not finite.
     pub fn from_triangles(triangles: &[[Vec3; 3]]) -> Result<Self> {
         let mut index: HashMap<[u64; 3], u32> = HashMap::new();
         let mut vertices = Vec::new();

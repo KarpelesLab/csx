@@ -5,7 +5,15 @@
 //! axes in cyclic order: `u` along `(norm_dir + 1) % 3` and `v` along
 //! `(norm_dir + 2) % 3` (for `norm_dir = 2`: `u = x`, `v = y`).
 //!
+//! | `norm_dir` | `u` (`X1`) | `v` (`X2`) |
+//! |---|---|---|
+//! | 0 (x) | y | z |
+//! | 1 (y) | z | x |
+//! | 2 (z) | x | y |
+//!
 //! Polygon based primitives are always defined in Cartesian coordinates.
+//! Polygons are implicitly closed and may be concave; points on an edge
+//! count as inside.
 
 use core::f64::consts::{PI, TAU};
 
@@ -24,6 +32,29 @@ use super::geom::{angle_ok, in_range, point_in_polygon, sector_bbox};
 /// `PolyVertices` dereferences to the evaluated `(u, v)` slice. Vertices given
 /// as expressions evaluate to `NaN` until updated, unless they are
 /// parameter-free.
+///
+/// ```
+/// use csx::primitives::PolyVertices;
+/// use csx::ParameterSet;
+///
+/// // Plain numbers convert directly.
+/// let square: PolyVertices = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].into();
+/// assert_eq!(square.len(), 4);
+/// assert_eq!(square[2], (1.0, 1.0));
+///
+/// // Parametric vertices keep their expressions.
+/// let mut tri = PolyVertices::new();
+/// tri.push(0.0, 0.0);
+/// tri.push("w", 0.0);
+/// tri.push("w", "w/2");
+/// assert!(tri[1].0.is_nan()); // not evaluated yet
+/// let mut ps = ParameterSet::new();
+/// ps.set("w", 4.0);
+/// tri.update(&ps)?;
+/// assert_eq!(tri[2], (4.0, 2.0));
+/// assert_eq!(tri.points()[2][1].expression(), Some("w/2"));
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct PolyVertices {
     points: Vec<[Scalar; 2]>,
@@ -66,7 +97,11 @@ impl PolyVertices {
         self.points.push(p);
     }
 
-    /// Replaces vertex `i`. Panics if `i` is out of bounds.
+    /// Replaces vertex `i`.
+    ///
+    /// # Panics
+    ///
+    /// If `i` is out of bounds (like slice indexing).
     pub fn set(&mut self, i: usize, u: impl Into<Scalar>, v: impl Into<Scalar>) {
         let p = [u.into(), v.into()];
         self.values[i] = (p[0].value(), p[1].value());
@@ -80,6 +115,13 @@ impl PolyVertices {
     }
 
     /// Re-evaluates the parametric coordinates against `params`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`](crate::Error::UnknownVariable) or
+    /// [`Error::Parse`](crate::Error::Parse) when a vertex expression cannot
+    /// be evaluated, [`Error::Invalid`](crate::Error::Invalid) when it
+    /// evaluates to NaN. Vertices before the failing one are already updated.
     pub fn update(&mut self, params: &ParameterSet) -> Result<()> {
         for (p, v) in self.points.iter_mut().zip(&mut self.values) {
             p[0].update(params)?;
@@ -127,7 +169,12 @@ impl FromIterator<(f64, f64)> for PolyVertices {
     }
 }
 
-/// The two in-plane axes for a plane normal to `n`.
+/// The two in-plane axes `(u, v)` for a plane normal to axis `n` (0..=2):
+/// `((n + 1) % 3, (n + 2) % 3)`.
+///
+/// ```
+/// assert_eq!(csx::primitives::plane_axes(1), (2, 0)); // normal y: u = z, v = x
+/// ```
 #[inline]
 pub fn plane_axes(n: usize) -> (usize, usize) {
     ((n + 1) % 3, (n + 2) % 3)
@@ -159,7 +206,20 @@ fn verts_bbox(n: usize, verts: &[(f64, f64)], lo: f64, hi: f64) -> BoundingBox {
     b
 }
 
-/// A planar polygon (2-D sheet).
+/// A planar polygon (2-D sheet) in the plane `axis[norm_dir] = elevation`.
+///
+/// ```
+/// use csx::primitives::{Polygon, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // An L-shaped sheet at z = 0.5 (normal z: vertices are (x, y)).
+/// let l = vec![(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (0.0, 2.0)];
+/// let p = Primitive::new(Polygon::new(2, 0.5, l));
+/// assert_eq!(p.dimension(), 2);
+/// assert!(p.contains(Vec3::new(0.5, 1.5, 0.5), CoordSystem::Cartesian));
+/// assert!(!p.contains(Vec3::new(1.5, 1.5, 0.5), CoordSystem::Cartesian)); // the notch
+/// assert!(!p.contains(Vec3::new(0.5, 1.5, 0.6), CoordSystem::Cartesian)); // off-plane
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polygon {
     /// Normal axis (0, 1, 2).
@@ -219,7 +279,20 @@ impl Polygon {
 }
 
 /// A polygon linearly extruded along its normal axis from `elevation` to
-/// `elevation + length`.
+/// `elevation + length` (`LinPoly` in CSXCAD files). A zero length makes it
+/// a sheet.
+///
+/// ```
+/// use csx::primitives::{LinPoly, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // A triangle in the x/y plane extruded from z = 0 to z = 1.6.
+/// let p = Primitive::new(LinPoly::new(2, 0.0, 1.6, vec![(0.0, 0.0), (4.0, 0.0), (0.0, 3.0)]));
+/// assert_eq!(p.dimension(), 3);
+/// assert!(p.contains(Vec3::new(1.0, 1.0, 0.8), CoordSystem::Cartesian));
+/// assert!(!p.contains(Vec3::new(3.0, 3.0, 0.8), CoordSystem::Cartesian));
+/// assert_eq!(p.bounding_box(CoordSystem::Cartesian).max, Vec3::new(4.0, 3.0, 1.6));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LinPoly {
     /// Normal (extrusion) axis.
@@ -286,7 +359,23 @@ impl LinPoly {
 /// rotation axis `rot_axis_dir`. Let `q` be the third axis (the *radial*
 /// axis). The polygon is swept by a right-handed rotation about
 /// `rot_axis_dir` from `start_angle` to `stop_angle` (radians), where angle
-/// `0` is the polygon's own position (radial direction `+q`).
+/// `0` is the polygon's own position (radial direction `+q`). Both
+/// orientations of the angle range describe the same sweep; a range of 2π
+/// or more is a full revolution. The XML form is `<RotPoly NormDir
+/// RotAxisDir>` with `<Angles Start Stop/>` (verified against CSXCAD).
+///
+/// ```
+/// use csx::primitives::{Primitive, RotPoly};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // A washer: the square ρ ∈ [1, 2], z ∈ [0, 1] in the x/z plane (normal y,
+/// // vertices are (z, x)) revolved about the z axis.
+/// let washer = RotPoly::new(1, 2, vec![(0.0, 1.0), (1.0, 1.0), (1.0, 2.0), (0.0, 2.0)]);
+/// let p = Primitive::new(washer);
+/// assert!(p.contains(Vec3::new(0.0, -1.5, 0.5), CoordSystem::Cartesian));
+/// assert!(!p.contains(Vec3::new(0.5, 0.0, 0.5), CoordSystem::Cartesian)); // the hole
+/// assert_eq!(p.bounding_box(CoordSystem::Cartesian).max, Vec3::new(2.0, 2.0, 1.0));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct RotPoly {
     /// Normal axis of the polygon plane.

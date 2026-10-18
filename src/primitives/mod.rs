@@ -1,39 +1,130 @@
 //! Geometric primitives.
 //!
-//! A [`Primitive`] combines a [`Shape`] with a priority, an optional
-//! coordinate system and an optional [`Transform`]. Primitives are owned by
-//! properties (see [`crate::properties::Property`]); when several primitives
-//! overlap, the one with the highest priority determines the property at a
-//! point.
+//! A [`Primitive`] places a [`Shape`] in a model. It adds a priority, an
+//! optional coordinate system and an optional [`Transform`]. Primitives are
+//! owned by properties (see [`crate::properties::Property`]), which say what
+//! the region *is* (material, metal, probe, ...).
 //!
-//! Inside tests take a point together with the coordinate system it is
-//! expressed in. The point is converted to Cartesian coordinates, mapped
-//! through the inverse transformation into the primitive's local frame and
-//! tested against the shape.
+//! ```
+//! use csx::primitives::{BoxShape, Primitive, Sphere};
+//! use csx::{CoordSystem, Vec3};
+//!
+//! let slab = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [10.0, 10.0, 1.6]));
+//! assert!(slab.contains(Vec3::new(5.0, 5.0, 0.8), CoordSystem::Cartesian));
+//! assert_eq!(slab.dimension(), 3);
+//!
+//! let ball = Primitive::new(Sphere::new([0.0, 0.0, 0.0], 2.0)).with_priority(10);
+//! let bb = ball.bounding_box(CoordSystem::Cartesian);
+//! assert_eq!(bb.max, Vec3::new(2.0, 2.0, 2.0));
+//! ```
+//!
+//! # Shapes
+//!
+//! | Shape | XML element | Dimension | Defined by | Coordinate system |
+//! |---|---|---|---|---|
+//! | [`BoxShape`] | `Box` | 0–3 (by extent) | two corners | Cartesian box or cylindrical sector |
+//! | [`MultiBox`] | `MultiBox` | 0–3 | corner pairs | raw comparison in the structure's system |
+//! | [`Sphere`] | `Sphere` | 3 | centre, radius | centre converted from `(ρ, α, z)` |
+//! | [`SphericalShell`] | `SphericalShell` | 2–3 | centre, radius, width | centre converted |
+//! | [`Cylinder`] | `Cylinder` | 3 | axis end points, radius | end points converted |
+//! | [`CylindricalShell`] | `CylindricalShell` | 2–3 | axis end points, radius, width | end points converted |
+//! | [`Polygon`] | `Polygon` | 2 | normal axis, elevation, vertices | always Cartesian |
+//! | [`LinPoly`] | `LinPoly` | 2–3 | polygon + extrusion length | always Cartesian |
+//! | [`RotPoly`] | `RotPoly` | 3 | polygon + rotation axis, angles | always Cartesian |
+//! | [`Curve`] | `Curve` | 0–1 | polyline vertices | vertices converted |
+//! | [`Wire`] | `Wire` | 0, 1 or 3 | polyline vertices, radius | vertices converted |
+//! | [`PointShape`] | `Point` | 0 | one point | point converted |
+//! | [`Polyhedron`] | `Polyhedron` | 2 (open) or 3 (closed) | vertices, faces | always Cartesian |
+//! | [`PolyhedronReader`] | `PolyhedronReader` | 2–3 once loaded | STL / PLY file | always Cartesian |
+//! | [`UserDefined`] | `UserDefined` | 3 | boolean expression | Cartesian variables |
+//!
+//! Boundaries are inclusive: a point on a box face or polygon edge is
+//! inside. Curves and points describe lines and locations for meshing and
+//! probing; like in CSXCAD they never *contain* a point.
+//!
+//! # Priority
+//!
+//! When primitives overlap, the one with the highest priority determines
+//! the property at a point (see
+//! [`ContinuousStructure::property_at`](crate::ContinuousStructure::property_at)).
+//! On equal priority the primitive of the earlier property wins, then the
+//! earlier primitive within a property. Probes, dumps and excitations are
+//! usually queried separately (with a [`TypeMask`](crate::TypeMask)), so
+//! their priority only matters among themselves.
 //!
 //! # Coordinate systems
 //!
-//! The semantics below match CSXCAD 0.7 (verified black-box with random
-//! models and point queries):
+//! A primitive's values are interpreted in its own coordinate system or,
+//! when it has none, in the structure's. Inside tests take a point together
+//! with the coordinate system it is expressed in. The semantics match
+//! CSXCAD 0.7 (verified black-box with random models and point queries):
 //!
-//! * A [`BoxShape`] in cylindrical coordinates is an annular sector. Queried
-//!   with cylindrical coordinates it compares them as given: a negative `ρ`
-//!   is outside and `α` is taken modulo 2π.
+//! * A [`BoxShape`] in cylindrical coordinates is an annular sector
+//!   `(ρ₁..ρ₂, α₁..α₂, z₁..z₂)`. Queried with cylindrical coordinates it
+//!   compares them as given: a negative `ρ` is outside and `α` is taken
+//!   modulo 2π.
 //! * A [`MultiBox`] ignores its own coordinate system: its corners are in the
 //!   structure's system and are compared component-wise, without angle
-//!   wrapping.
+//!   wrapping (see [`Primitive::shape_cs`]).
 //! * Point-defined shapes (spheres, cylinders, their shells, curves, wires,
 //!   points) convert their defining points from `(ρ, α, z)` when their
-//!   coordinate system is cylindrical; the geometry itself is Euclidean
+//!   coordinate system is cylindrical; the geometry itself stays Euclidean
 //!   (straight wire segments, round spheres). See [`Shape::to_cartesian`].
 //! * Polygon based shapes and polyhedra are always Cartesian.
 //! * Shapes other than boxes see query points through the Cartesian
 //!   conversion, so `(-ρ, α)` is the same point as `(ρ, α + π)`.
 //!
+//! ```
+//! use core::f64::consts::FRAC_PI_2;
+//! use csx::primitives::{BoxShape, Primitive};
+//! use csx::{CoordSystem, Vec3};
+//!
+//! // A quarter annulus: ρ ∈ [1, 2], α ∈ [0, π/2], z ∈ [0, 1].
+//! let sector = Primitive::new(BoxShape::new([1.0, 0.0, 0.0], [2.0, FRAC_PI_2, 1.0]))
+//!     .with_coord_system(CoordSystem::Cylindrical);
+//! assert!(sector.contains(Vec3::new(1.0, 1.0, 0.5), CoordSystem::Cartesian));
+//! assert!(!sector.contains(Vec3::new(-1.0, 1.0, 0.5), CoordSystem::Cartesian));
+//! // The same point queried in cylindrical coordinates.
+//! assert!(sector.contains(Vec3::new(2f64.sqrt(), FRAC_PI_2 / 2.0, 0.5), CoordSystem::Cylindrical));
+//! ```
+//!
 //! Known divergence: CSXCAD 0.7 clips cylindrical-coordinate wires to a
 //! bounding box that it computes inconsistently (it can even be inverted),
 //! so parts of such wires are invisible to CSXCAD; this crate uses the true
 //! geometry.
+//!
+//! # Transformations
+//!
+//! A primitive's [`Transform`] maps the shape from its local frame to the
+//! world, in Cartesian space. The operations are applied in list order (the
+//! first one first). Rotation angles are radians unless the transform is set
+//! to degrees. A `Matrix` operation holds 16 values in row-major order and
+//! acts on column vectors, so the translation is in the last column.
+//!
+//! Inside tests map the query point through the inverse transformation and
+//! test it against the untransformed shape. A singular transformation (for
+//! example a zero scale) contains no point.
+//!
+//! ```
+//! use core::f64::consts::FRAC_PI_2;
+//! use csx::primitives::{BoxShape, Primitive};
+//! use csx::{CoordSystem, Transform, Vec3};
+//!
+//! let mut t = Transform::new();
+//! // First rotate a quarter turn about z, then move 10 units along x.
+//! t.rotate_axis(2, FRAC_PI_2).translate(Vec3::new(10.0, 0.0, 0.0));
+//! let bar = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [4.0, 1.0, 1.0])).with_transform(t);
+//! // The bar now runs along +y, starting at x = 9..10.
+//! assert!(bar.contains(Vec3::new(9.5, 3.0, 0.5), CoordSystem::Cartesian));
+//! assert!(!bar.contains(Vec3::new(3.0, 0.5, 0.5), CoordSystem::Cartesian));
+//! ```
+//!
+//! # Parametric values
+//!
+//! Coordinates, radii and lengths are [`Scalar`](crate::Scalar)s and may be
+//! expressions over the structure's parameters. They are evaluated by
+//! [`Primitive::update`] (usually through
+//! [`ContinuousStructure::update`](crate::ContinuousStructure::update)).
 
 mod basic;
 pub(crate) mod bvh;
@@ -60,6 +151,16 @@ use crate::param::{ParameterSet, ScalarPoint};
 use crate::transform::Transform;
 
 /// Mesh file formats understood by [`PolyhedronReader`].
+///
+/// ```
+/// use csx::primitives::MeshFileType;
+///
+/// assert_eq!("stl".parse::<MeshFileType>().unwrap(), MeshFileType::Stl);
+/// assert_eq!("2".parse::<MeshFileType>().unwrap(), MeshFileType::Ply);
+/// assert_eq!(MeshFileType::from_path("parts/horn.ply"), Some(MeshFileType::Ply));
+/// assert_eq!(MeshFileType::Stl.to_string(), "STL");
+/// assert_eq!(MeshFileType::Stl.id(), 1);
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MeshFileType {
@@ -111,12 +212,62 @@ impl core::fmt::Display for MeshFileType {
     }
 }
 
-/// A polyhedron loaded from an external mesh file.
+/// A polyhedron loaded from an external mesh file (`PolyhedronReader` in
+/// CSXCAD files).
 ///
 /// The loaded mesh is a cache of the file contents: changing the file name
 /// or type through the setters discards it, and
 /// [`crate::ContinuousStructure::update`] (or [`PolyhedronReader::load`])
-/// loads it again. Equality compares the definition only.
+/// loads it again. Until a mesh is loaded the primitive contains no point
+/// and has an empty bounding box. Equality compares the definition only.
+///
+/// ```
+/// use csx::primitives::{MeshFileType, PolyhedronReader, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // A tetrahedron as ASCII STL.
+/// let stl = "solid t
+/// facet normal 0 0 -1
+///  outer loop
+///   vertex 0 0 0
+///   vertex 0 1 0
+///   vertex 1 0 0
+///  endloop
+/// endfacet
+/// facet normal 0 -1 0
+///  outer loop
+///   vertex 0 0 0
+///   vertex 1 0 0
+///   vertex 0 0 1
+///  endloop
+/// endfacet
+/// facet normal -1 0 0
+///  outer loop
+///   vertex 0 0 0
+///   vertex 0 0 1
+///   vertex 0 1 0
+///  endloop
+/// endfacet
+/// facet normal 1 1 1
+///  outer loop
+///   vertex 1 0 0
+///   vertex 0 1 0
+///   vertex 0 0 1
+///  endloop
+/// endfacet
+/// endsolid t
+/// ";
+/// let mut reader = PolyhedronReader::new("tetra.stl");
+/// assert_eq!(reader.file_type(), MeshFileType::Stl);
+/// assert!(!reader.is_loaded());
+/// reader.load_bytes(stl.as_bytes())?;
+/// assert!(reader.mesh().unwrap().is_closed());
+///
+/// let prim = Primitive::new(reader);
+/// assert!(prim.contains(Vec3::new(0.1, 0.1, 0.1), CoordSystem::Cartesian));
+/// assert_eq!(prim.dimension(), 3);
+/// # Ok::<(), csx::Error>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct PolyhedronReader {
     file_name: String,
@@ -185,6 +336,13 @@ impl PolyhedronReader {
 
     /// Loads the mesh from in-memory file contents (format per
     /// [`PolyhedronReader::file_type`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Format`](crate::Error::Format) if the data is not a valid
+    /// STL / PLY mesh, [`Error::Invalid`](crate::Error::Invalid) if its faces
+    /// reference missing vertices or it has non-finite coordinates. The
+    /// previously loaded mesh (if any) is kept on error.
     pub fn load_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.mesh = Some(match self.file_type {
             MeshFileType::Stl => crate::io::stl::parse(data)?,
@@ -194,7 +352,14 @@ impl PolyhedronReader {
     }
 
     /// Loads the mesh from disk. Relative paths are resolved against
-    /// `base_dir` when given.
+    /// `base_dir` when given (structures read from a file use the file's
+    /// directory, see
+    /// [`ContinuousStructure::base_dir`](crate::ContinuousStructure::base_dir)).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`](crate::Error::Io) if the file cannot be read, otherwise
+    /// as [`PolyhedronReader::load_bytes`].
     pub fn load(&mut self, base_dir: Option<&std::path::Path>) -> Result<()> {
         let mut path = std::path::PathBuf::from(&self.file_name);
         if path.is_relative()
@@ -208,6 +373,22 @@ impl PolyhedronReader {
 }
 
 /// The geometric definition of a primitive.
+///
+/// Every shape type converts into a `Shape` (and directly into a
+/// [`Primitive`]) with `From`, so most code never names the variants:
+///
+/// ```
+/// use csx::primitives::{Cylinder, Primitive, Shape};
+///
+/// let shape: Shape = Cylinder::new([0.0, 0.0, 0.0], [0.0, 0.0, 5.0], 1.0).into();
+/// assert_eq!(shape.type_name(), "Cylinder");
+/// assert_eq!(shape.dimension(), 3);
+/// let prim: Primitive = Cylinder::new([0.0, 0.0, 0.0], [0.0, 0.0, 5.0], 1.0).into();
+/// assert_eq!(prim.shape, shape);
+/// ```
+///
+/// The enum is `#[non_exhaustive]`: new shape types may be added in minor
+/// releases.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
@@ -270,6 +451,19 @@ impl Shape {
     /// unchanged — boxes keep interpreting their corners in `cs`, polygon
     /// based shapes and polyhedra are always Cartesian. After this, every
     /// shape except boxes can be read as Cartesian geometry.
+    ///
+    /// ```
+    /// use core::f64::consts::FRAC_PI_2;
+    /// use csx::primitives::{Shape, Sphere};
+    /// use csx::{CoordSystem, Vec3};
+    ///
+    /// // Centre at ρ = 2, α = π/2, z = 1 → (0, 2, 1).
+    /// let s: Shape = Sphere::new([2.0, FRAC_PI_2, 1.0], 0.5).into();
+    /// let Shape::Sphere(c) = &*s.to_cartesian(CoordSystem::Cylindrical) else {
+    ///     unreachable!()
+    /// };
+    /// assert!((c.center.value() - Vec3::new(0.0, 2.0, 1.0)).norm() < 1e-12);
+    /// ```
     pub fn to_cartesian(&self, cs: CoordSystem) -> Cow<'_, Shape> {
         if cs == CoordSystem::Cartesian || !self.is_point_defined() {
             return Cow::Borrowed(self);
@@ -330,8 +524,10 @@ impl Shape {
         }
     }
 
-    /// Inside test for a local Cartesian point; `cs` is the coordinate system
-    /// the shape's values are expressed in.
+    /// Inside test for a point in the shape's local Cartesian frame (before
+    /// any transformation); `cs` is the coordinate system the shape's values
+    /// are expressed in. Most callers want [`Primitive::contains`] instead,
+    /// which also handles query coordinate systems and transformations.
     pub fn contains_local(&self, p: Vec3, cs: CoordSystem) -> bool {
         match self {
             Shape::Box(s) => s.inside(p, cs),
@@ -352,7 +548,10 @@ impl Shape {
         }
     }
 
-    /// Local Cartesian bounding box.
+    /// Bounding box in the shape's local Cartesian frame (before any
+    /// transformation); `cs` is the coordinate system the shape's values are
+    /// expressed in. Unbounded shapes ([`UserDefined`]) return an infinite
+    /// box, unloaded [`PolyhedronReader`]s an empty one.
     pub fn local_bounding_box(&self, cs: CoordSystem) -> BoundingBox {
         match self {
             Shape::Box(s) => s.bbox(cs),
@@ -387,6 +586,10 @@ impl Shape {
     }
 
     /// Topological dimension: 0 (point), 1 (curve), 2 (sheet) or 3 (solid).
+    ///
+    /// Degenerate shapes report their actual dimension: a box with one zero
+    /// extent is a sheet (2), a wire with zero radius a curve (1). Mesh
+    /// generation and discretisation use this to treat sheets and lines.
     pub fn dimension(&self) -> usize {
         match self {
             Shape::Box(s) => s.dimension(),
@@ -410,7 +613,15 @@ impl Shape {
         }
     }
 
-    /// Re-evaluates parametric values.
+    /// Re-evaluates parametric values against `p`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVariable`](crate::Error::UnknownVariable) or
+    /// [`Error::Parse`](crate::Error::Parse) for expressions that cannot be
+    /// evaluated; [`Error::Invalid`](crate::Error::Invalid) for invalid
+    /// results (negative radius, axis index out of range, rotation axis equal
+    /// to the polygon normal, ...).
     pub fn update(&mut self, p: &ParameterSet) -> Result<()> {
         match self {
             Shape::Box(s) => s.update(p),
@@ -451,7 +662,23 @@ impl_from_shape! {
     UserDefined => UserDefined,
 }
 
-/// A shape placed in a model.
+/// A shape placed in a model: the [`Shape`] plus priority, coordinate system
+/// and placement transformation.
+///
+/// Primitives are usually added to a property through
+/// [`ContinuousStructure::add_primitive`](crate::ContinuousStructure::add_primitive)
+/// or [`Property::add_primitive`](crate::Property::add_primitive); both
+/// accept any shape type directly.
+///
+/// ```
+/// use csx::primitives::{BoxShape, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// let p = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 0.0])).with_priority(5);
+/// assert_eq!(p.dimension(), 2); // a sheet in the z = 0 plane
+/// assert!(p.contains(Vec3::new(0.5, 0.5, 0.0), CoordSystem::Cartesian));
+/// assert!(!p.contains(Vec3::new(0.5, 0.5, 0.1), CoordSystem::Cartesian));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Primitive {
     /// Overlap resolution priority (higher wins).
@@ -490,7 +717,8 @@ impl Primitive {
         self
     }
 
-    /// Builder: sets the coordinate system.
+    /// Builder: sets the coordinate system the shape's values are written in
+    /// (see the [module docs](self#coordinate-systems)).
     #[must_use]
     pub fn with_coord_system(mut self, cs: CoordSystem) -> Self {
         self.coord_system = Some(cs);
@@ -554,13 +782,36 @@ impl Primitive {
         }
     }
 
-    /// Inside test for `p` expressed in `p_cs` (default coordinate system:
-    /// Cartesian).
+    /// Inside test for `p` expressed in `p_cs`, for a primitive whose
+    /// coordinate system defaults to Cartesian. Inside a structure use
+    /// [`Primitive::contains_in`] with the structure's coordinate system, or
+    /// the structure's own queries.
+    ///
+    /// ```
+    /// use csx::primitives::{Primitive, Sphere};
+    /// use csx::{CoordSystem, Vec3};
+    ///
+    /// let s = Primitive::new(Sphere::new([0.0, 0.0, 0.0], 1.0));
+    /// assert!(s.contains(Vec3::new(0.0, 0.5, 0.5), CoordSystem::Cartesian));
+    /// // (ρ, α, z) = (0.5, 1.0, 0.5) is also inside.
+    /// assert!(s.contains(Vec3::new(0.5, 1.0, 0.5), CoordSystem::Cylindrical));
+    /// ```
     pub fn contains(&self, p: Vec3, p_cs: CoordSystem) -> bool {
         self.contains_in(p, p_cs, CoordSystem::Cartesian)
     }
 
-    /// World-space Cartesian bounding box.
+    /// World-space Cartesian bounding box (after the transformation);
+    /// `default_cs` is the structure's coordinate system. Unbounded shapes
+    /// return an infinite box and empty shapes [`BoundingBox::EMPTY`].
+    ///
+    /// ```
+    /// use csx::primitives::{Cylinder, Primitive};
+    /// use csx::{CoordSystem, Vec3};
+    ///
+    /// let c = Primitive::new(Cylinder::new([0.0, 0.0, 0.0], [0.0, 0.0, 3.0], 0.5));
+    /// let b = c.bounding_box(CoordSystem::Cartesian);
+    /// assert_eq!((b.min, b.max), (Vec3::new(-0.5, -0.5, 0.0), Vec3::new(0.5, 0.5, 3.0)));
+    /// ```
     pub fn bounding_box(&self, default_cs: CoordSystem) -> BoundingBox {
         let b = self.shape.local_bounding_box(self.shape_cs(default_cs));
         if self.transform.is_empty() || b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
@@ -604,6 +855,11 @@ impl Primitive {
     }
 
     /// Re-evaluates parametric values of the shape and the transformation.
+    ///
+    /// # Errors
+    ///
+    /// As [`Shape::update`], plus [`Error::Invalid`](crate::Error::Invalid)
+    /// for a singular transformation.
     pub fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.shape.update(p)?;
         self.transform.update(p)

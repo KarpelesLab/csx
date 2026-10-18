@@ -35,6 +35,19 @@ fn polyline_scale(points: &[ScalarPoint]) -> f64 {
 /// As in CSXCAD, no point is ever "inside" a curve: curves have no volume
 /// and are handled by their edges (see [`crate::discretize`]). In a
 /// cylindrical coordinate system the vertices are `(ρ, α, z)`.
+///
+/// Curves are used for thin wires in the mesh (their vertices become mesh
+/// lines, their segments PEC edges) and for line probes.
+///
+/// ```
+/// use csx::primitives::{Curve, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// let c = Primitive::new(Curve::new([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 2.0, 0.0]]));
+/// assert_eq!(c.dimension(), 1);
+/// assert!(!c.contains(Vec3::new(0.5, 0.0, 0.0), CoordSystem::Cartesian));
+/// assert_eq!(c.bounding_box(CoordSystem::Cartesian).max, Vec3::new(1.0, 2.0, 0.0));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Curve {
     /// Polyline vertices.
@@ -66,7 +79,21 @@ impl Curve {
     }
 }
 
-/// A curve with a circular cross section of radius `radius`.
+/// A curve with a circular cross section of radius `radius`: the set of
+/// points within `radius` of the polyline (round joints and end caps). With
+/// a zero radius it behaves like a [`Curve`]. In a cylindrical coordinate
+/// system the vertices are `(ρ, α, z)`; the segments stay straight.
+///
+/// ```
+/// use csx::primitives::{Primitive, Wire};
+/// use csx::{CoordSystem, Vec3};
+///
+/// let w = Primitive::new(Wire::new([[0.0, 0.0, 0.0], [0.0, 0.0, 5.0]], 0.2));
+/// assert_eq!(w.dimension(), 3);
+/// assert!(w.contains(Vec3::new(0.1, 0.0, 2.5), CoordSystem::Cartesian));
+/// assert!(!w.contains(Vec3::new(0.3, 0.0, 2.5), CoordSystem::Cartesian));
+/// assert_eq!(w.bounding_box(CoordSystem::Cartesian).max, Vec3::new(0.2, 0.2, 5.2));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Wire {
     /// Polyline vertices.
@@ -124,7 +151,20 @@ impl Wire {
     }
 }
 
-/// A single point (0-D). Like curves, a point never contains anything.
+/// A single point (0-D, `<Point>` in CSXCAD files). Like curves, a point
+/// never contains anything; it marks a location (e.g. a field probe) and a
+/// mesh line candidate. In a cylindrical coordinate system it is
+/// `(ρ, α, z)`.
+///
+/// ```
+/// use csx::primitives::{PointShape, Primitive};
+/// use csx::{CoordSystem, Vec3};
+///
+/// let p = Primitive::new(PointShape::new([1.0, 2.0, 3.0]));
+/// assert_eq!(p.dimension(), 0);
+/// assert!(!p.contains(Vec3::new(1.0, 2.0, 3.0), CoordSystem::Cartesian));
+/// assert_eq!(p.bounding_box(CoordSystem::Cartesian).min, Vec3::new(1.0, 2.0, 3.0));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PointShape {
     /// Location.

@@ -19,6 +19,24 @@ pub const USER_VARS: [&str; 7] = ["x", "y", "z", "rho", "a", "r", "t"];
 /// The function is private so its compiled form can never go stale; change
 /// it with [`UserDefined::set_function`]. Functions that reference
 /// parameters are compiled when the owning structure is updated.
+///
+/// CSXCAD 0.7 itself does not support this primitive (it drops it when
+/// reading); this crate reads and writes it as `<UserDefined>` with an
+/// `<Equation>` text and a `<CoordShift X Y Z/>` origin.
+///
+/// ```
+/// use csx::primitives::{Primitive, UserDefined};
+/// use csx::{CoordSystem, Vec3};
+///
+/// // A cone with its apex at (0, 0, 5), opening downwards.
+/// let cone = UserDefined::new("rho < -z & z < 0 & z > -5").with_base([0.0, 0.0, 5.0]);
+/// assert!(cone.is_compiled());
+/// let p = Primitive::new(cone);
+/// assert!(p.contains(Vec3::new(0.5, 0.0, 2.0), CoordSystem::Cartesian));
+/// assert!(!p.contains(Vec3::new(4.0, 0.0, 2.0), CoordSystem::Cartesian));
+/// // The extent is unbounded.
+/// assert!(p.bounding_box(CoordSystem::Cartesian).max.x().is_infinite());
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct UserDefined {
     function: String,
