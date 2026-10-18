@@ -9,10 +9,10 @@ A pure Rust library for continuous-structure geometry and material modeling,
 compatible with [CSXCAD](https://openems.de) and openEMS.
 
 * Clean-room implementation (no CSXCAD/openEMS code was consulted), MIT licensed.
+  Behaviour is derived from public documentation, the observable file
+  format and black-box runs of CSXCAD.
 * Zero runtime dependencies; XML support is an optional (default) feature.
 * Edition 2024, MSRV 1.95.
-
-Status: early development — see [PLAN.md](PLAN.md).
 
 ## Overview
 
@@ -60,6 +60,39 @@ More examples:
 * `cargo run --example export_vtk -- file.xml out_dir` — VTK + STL export
 * `cargo run --release --example discretize -- file.xml` — discretise onto
   the mesh and print statistics
+
+## Compatibility notes
+
+Behaviour confirmed from public documentation, published XML output and
+black-box runs of CSXCAD 0.7 (its Python API, never its source):
+
+* Coordinate systems: a `Box` in cylindrical coordinates is an annular
+  sector; spheres, cylinders, their shells, curves, wires and points convert
+  their defining points from `(ρ, α, z)`; multi-boxes, polygons, extruded and
+  revolved polygons and polyhedra are always Cartesian. Multi-boxes ignore
+  their own `CoordSystem` and compare raw coordinates in the structure's
+  system (no angle wrapping). Primitives without `CoordSystem` inherit the
+  structure's; structure queries take coordinates in the structure's system.
+  A cylindrical box compares cylindrical queries as given (negative `ρ` is
+  outside, `α` modulo 2π); every other shape folds `(-ρ, α)` through the
+  Cartesian conversion. Verified with 140k random cylindrical-structure
+  queries. Known divergence: CSXCAD clips cylindrical wires to an
+  inconsistently computed bounding box; csx keeps the true geometry.
+* Curves and points never contain a point.
+* Equal priorities: the earlier property wins.
+* Transformations are applied in list order; angles are radians in files;
+  `Matrix` is row-major acting on column vectors (translation in the last
+  column); vector scaling is written `Scale3`.
+* Polygon vertices `(X1, X2)` map to axes `(n+1)%3, (n+2)%3` for normal `n`;
+  revolved polygons rotate right-handed about `RotAxisDir` starting at the
+  remaining (radial) axis.
+* Material values are written as three comma separated values; with
+  `Isotropy="1"` only the first is used. Dispersive terms use 1-based `_n`
+  suffixes in `Property` and `Weight`.
+* Weighting function variables: `x y z rho a r t`, in drawing units.
+* Expressions: any non-zero value is true.
+* `UserDefined` primitives are not supported by CSXCAD 0.7; csx reads and
+  writes them in its own format (`<Equation>` text, `<CoordShift>` origin).
 
 ## Features
 
