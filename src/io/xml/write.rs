@@ -186,7 +186,7 @@ fn property(p: &Property, index: usize) -> Element {
             el.set_attr("Enabled", b(e.enabled));
             el.set_attr("Frequency", e.frequency.to_text());
             el.set_attr("Delay", e.delay.to_text());
-            el.set_attr("Type", e.excitation_type.to_string());
+            el.set_attr("Type", e.excitation_type.id().to_string());
             el.set_attr("Excite", s3(&e.excite));
             el.set_attr("PropDir", s3(&e.prop_dir));
             children.push(
@@ -199,9 +199,9 @@ fn property(p: &Property, index: usize) -> Element {
         PropertyKind::ProbeBox(pb) => probe(&mut el, &mut children, pb),
         PropertyKind::DumpBox(d) => {
             probe(&mut el, &mut children, &d.probe);
-            el.set_attr("DumpType", d.dump_type.to_string());
-            el.set_attr("DumpMode", d.dump_mode.to_string());
-            el.set_attr("FileType", d.file_type.to_string());
+            el.set_attr("DumpType", d.dump_type.id().to_string());
+            el.set_attr("DumpMode", d.dump_mode.id().to_string());
+            el.set_attr("FileType", d.file_type.id().to_string());
             el.set_attr("MultiGridLevel", d.multi_grid_level.to_string());
             if let Some(s) = d.sub_sampling {
                 el.set_attr("SubSampling", join(s.iter().map(u32::to_string)));
@@ -211,19 +211,19 @@ fn property(p: &Property, index: usize) -> Element {
             }
         }
         PropertyKind::LumpedElement(l) => {
-            el.set_attr("Direction", l.direction.to_string());
+            el.set_attr("Direction", l.direction.index().to_string());
             el.set_attr("Caps", b(l.caps));
             el.set_attr("R", l.r.to_text());
             el.set_attr("C", l.c.to_text());
             el.set_attr("L", l.l.to_text());
             if let Some(t) = l.le_type {
-                el.set_attr("LEtype", t.to_string());
+                el.set_attr("LEtype", t.id().to_string());
             }
         }
         PropertyKind::AbsorbingBC(a) => {
             el.set_attr("NormalSignPositive", b(a.normal_sign_positive));
             el.set_attr("PhaseVelocity", a.phase_velocity.to_text());
-            el.set_attr("AbsorbingBoundaryType", a.abc_type.to_string());
+            el.set_attr("AbsorbingBoundaryType", a.abc_type.id().to_string());
         }
     }
     extend(&mut el, &p.extra_attributes);
@@ -271,9 +271,12 @@ fn material(
 
 fn probe(el: &mut Element, children: &mut Vec<Element>, p: &ProbeBox) {
     el.set_attr("Number", p.number.to_string());
-    el.set_attr("Type", p.probe_type.to_string());
+    el.set_attr("Type", p.probe_type.id().to_string());
     el.set_attr("Weight", p.weight.to_text());
-    el.set_attr("NormDir", p.norm_dir.unwrap_or(-1).to_string());
+    el.set_attr(
+        "NormDir",
+        p.norm_dir.map_or(-1, |a| a.index() as i32).to_string(),
+    );
     el.set_attr("StartTime", p.start_time.to_text());
     el.set_attr("StopTime", p.stop_time.to_text());
     if !p.frequencies.is_empty() {

@@ -18,6 +18,9 @@ use crate::properties::{
     Excitation, LorentzMaterial, LorentzPole, LumpedElement, Material, MaterialQuantity, ProbeBox,
     Property, PropertyKind, Rgba, WeightFn,
 };
+use crate::properties::{
+    Axis, DumpFileType, DumpMode, DumpType, ExcitationType, LumpedElementType, ProbeType,
+};
 use crate::structure::ContinuousStructure;
 use crate::transform::{Transform, TransformOp};
 
@@ -343,7 +346,7 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
             let mut e = Excitation {
                 number: a.int("Number")?.unwrap_or(0).max(0) as u32,
                 enabled: a.bool("Enabled").unwrap_or(true),
-                excitation_type: a.int("Type")?.unwrap_or(0),
+                excitation_type: ExcitationType::from_id(a.int("Type")?.unwrap_or(0)),
                 ..Default::default()
             };
             if let Some(v) = a.get("Excite") {
@@ -374,9 +377,9 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
                 probe,
                 ..Default::default()
             };
-            d.dump_type = a.int("DumpType")?.unwrap_or(0);
-            d.dump_mode = a.int("DumpMode")?.unwrap_or(1);
-            d.file_type = a.int("FileType")?.unwrap_or(0);
+            d.dump_type = DumpType::from_id(a.int("DumpType")?.unwrap_or(0));
+            d.dump_mode = DumpMode::from_id(a.int("DumpMode")?.unwrap_or(1));
+            d.file_type = DumpFileType::from_id(a.int("FileType")?.unwrap_or(0));
             d.multi_grid_level = a.int("MultiGridLevel")?.unwrap_or(0);
             if let Some(v) = a.get("SubSampling") {
                 let v = split_list(v)
@@ -395,17 +398,21 @@ fn property(el: &Element, ps: &ParameterSet) -> Result<Property> {
             PropertyKind::DumpBox(d)
         }
         "LumpedElement" => PropertyKind::LumpedElement(LumpedElement {
-            direction: a.int("Direction")?.unwrap_or(0),
+            direction: axis_attr(a.int("Direction")?.unwrap_or(0), "Direction")?,
             caps: a.bool("Caps").unwrap_or(true),
             r: a.scalar("R").unwrap_or(Scalar::new(f64::NAN)),
             c: a.scalar("C").unwrap_or(Scalar::new(f64::NAN)),
             l: a.scalar("L").unwrap_or(Scalar::new(f64::NAN)),
-            le_type: a.int("LEtype")?,
+            le_type: a.int("LEtype")?.map(LumpedElementType::from_id),
         }),
         "AbsorbingBC" => PropertyKind::AbsorbingBC(AbsorbingBC {
             normal_sign_positive: a.bool("NormalSignPositive").unwrap_or(true),
             phase_velocity: a.scalar("PhaseVelocity").unwrap_or_default(),
-            abc_type: a.int("AbsorbingBoundaryType")?.unwrap_or(0),
+            abc_type: a
+                .get("AbsorbingBoundaryType")
+                .map(str::parse)
+                .transpose()?
+                .unwrap_or_default(),
         }),
         "Unknown" => PropertyKind::Unknown {
             property: a.get("Property").unwrap_or("").to_owned(),
@@ -555,11 +562,19 @@ fn debye_poles(el: &Element) -> Vec<DebyePole> {
         .collect()
 }
 
+/// Converts an axis index read from attribute `what`.
+fn axis_attr(d: i32, what: &str) -> Result<Axis> {
+    Axis::try_from(d).map_err(|_| Error::Format(format!("{what}: {d} is not an axis (0, 1 or 2)")))
+}
+
 fn probe(el: &Element, a: &Attrs<'_>) -> Result<ProbeBox> {
     let mut p = ProbeBox {
         number: a.int("Number")?.unwrap_or(0).max(0) as u32,
-        probe_type: a.int("Type")?.unwrap_or(0),
-        norm_dir: a.int("NormDir")?.filter(|&d| d >= 0),
+        probe_type: ProbeType::from_id(a.int("Type")?.unwrap_or(0)),
+        norm_dir: match a.int("NormDir")? {
+            Some(d) if d >= 0 => Some(axis_attr(d, "NormDir")?),
+            _ => None,
+        },
         ..Default::default()
     };
     if let Some(v) = a.scalar("Weight") {

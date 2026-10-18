@@ -4,6 +4,9 @@ use crate::error::Result;
 use crate::math::Vec3;
 use crate::param::{ParameterSet, Scalar};
 
+use super::types::{
+    AbcType, Axis, DumpFileType, DumpMode, DumpType, ExcitationType, LumpedElementType, ProbeType,
+};
 use super::weight::{Aniso, WeightFn, weight_vars};
 
 /// Electric/magnetic material with (optionally anisotropic and position
@@ -291,9 +294,8 @@ pub struct Excitation {
     pub number: u32,
     /// Whether the excitation is active.
     pub enabled: bool,
-    /// Excitation type: 0 = soft E, 1 = hard E, 2 = soft H, 3 = hard H,
-    /// 10 = plane wave.
-    pub excitation_type: i32,
+    /// Excitation type.
+    pub excitation_type: ExcitationType,
     /// Excitation vector (amplitude per axis).
     pub excite: [Scalar; 3],
     /// Spatial weighting per axis.
@@ -311,7 +313,7 @@ impl Default for Excitation {
         Excitation {
             number: 0,
             enabled: true,
-            excitation_type: 0,
+            excitation_type: ExcitationType::EFieldSoft,
             excite: Default::default(),
             weight: Default::default(),
             prop_dir: Default::default(),
@@ -330,9 +332,8 @@ impl Excitation {
         }
     }
 
-    /// Builder: excitation type (0 = soft E, 1 = hard E, 2 = soft H,
-    /// 3 = hard H, 10 = plane wave).
-    pub fn with_type(mut self, excitation_type: i32) -> Self {
+    /// Builder: excitation type.
+    pub fn with_type(mut self, excitation_type: ExcitationType) -> Self {
         self.excitation_type = excitation_type;
         self
     }
@@ -363,13 +364,13 @@ impl Excitation {
 pub struct ProbeBox {
     /// Probe number.
     pub number: u32,
-    /// Probe type: 0 = voltage, 1 = current, 2 = E-field, 3 = H-field,
-    /// 10 = waveguide voltage mode, 11 = waveguide current mode.
-    pub probe_type: i32,
+    /// Probe type.
+    pub probe_type: ProbeType,
     /// Weight (sign / scaling) of the probe result.
     pub weight: Scalar,
-    /// Normal direction (for current probes), if any.
-    pub norm_dir: Option<i32>,
+    /// Normal direction (for current probes), if any (`NormDir`, `-1` in
+    /// files when unset).
+    pub norm_dir: Option<Axis>,
     /// Start time of the recording (s).
     pub start_time: Scalar,
     /// Stop time of the recording (s).
@@ -379,9 +380,8 @@ pub struct ProbeBox {
 }
 
 impl ProbeBox {
-    /// Probe of the given type (0 = voltage, 1 = current, 2 = E, 3 = H,
-    /// 10/11 = waveguide voltage/current).
-    pub fn new(probe_type: i32) -> Self {
+    /// Probe of the given type.
+    pub fn new(probe_type: ProbeType) -> Self {
         ProbeBox {
             probe_type,
             ..Default::default()
@@ -395,7 +395,7 @@ impl ProbeBox {
     }
 
     /// Builder: normal direction.
-    pub fn with_norm_dir(mut self, d: i32) -> Self {
+    pub fn with_norm_dir(mut self, d: Axis) -> Self {
         self.norm_dir = Some(d);
         self
     }
@@ -411,7 +411,7 @@ impl Default for ProbeBox {
     fn default() -> Self {
         ProbeBox {
             number: 0,
-            probe_type: 0,
+            probe_type: ProbeType::Voltage,
             weight: Scalar::new(1.0),
             norm_dir: None,
             start_time: Scalar::new(0.0),
@@ -426,14 +426,12 @@ impl Default for ProbeBox {
 pub struct DumpBox {
     /// Common probe settings.
     pub probe: ProbeBox,
-    /// What to dump: 0 = E, 1 = H, 2 = J, 3 = rot(H), 4 = D, 5 = B; 10–15 the
-    /// frequency-domain variants; 20 = local SAR, 21 = 1 g, 22 = 10 g
-    /// averaged SAR, 29 = raw SAR data.
-    pub dump_type: i32,
-    /// Interpolation mode: 0 = none, 1 = node (default), 2 = cell.
-    pub dump_mode: i32,
-    /// File type: 0 = VTK, 1 = HDF5.
-    pub file_type: i32,
+    /// What to dump.
+    pub dump_type: DumpType,
+    /// Interpolation mode (default: node).
+    pub dump_mode: DumpMode,
+    /// Output file format.
+    pub file_type: DumpFileType,
     /// Spatial sub-sampling per axis.
     pub sub_sampling: Option<[u32; 3]>,
     /// Optional target resolution per axis.
@@ -443,16 +441,16 @@ pub struct DumpBox {
 }
 
 impl DumpBox {
-    /// Dump of the given type (0 = E, 1 = H, ...; see [`DumpBox::dump_type`]).
-    pub fn new(dump_type: i32) -> Self {
+    /// Dump of the given type.
+    pub fn new(dump_type: DumpType) -> Self {
         DumpBox {
             dump_type,
             ..Default::default()
         }
     }
 
-    /// Builder: file type (0 = VTK, 1 = HDF5).
-    pub fn with_file_type(mut self, file_type: i32) -> Self {
+    /// Builder: output file format.
+    pub fn with_file_type(mut self, file_type: DumpFileType) -> Self {
         self.file_type = file_type;
         self
     }
@@ -462,9 +460,9 @@ impl Default for DumpBox {
     fn default() -> Self {
         DumpBox {
             probe: ProbeBox::default(),
-            dump_type: 0,
-            dump_mode: 1,
-            file_type: 0,
+            dump_type: DumpType::EField,
+            dump_mode: DumpMode::Node,
+            file_type: DumpFileType::Vtk,
             sub_sampling: None,
             opt_resolution: None,
             multi_grid_level: 0,
@@ -475,8 +473,8 @@ impl Default for DumpBox {
 /// Lumped R/L/C element. Unset `c` / `l` values are NaN.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LumpedElement {
-    /// Direction of the element (0, 1, 2).
-    pub direction: i32,
+    /// Direction of the element.
+    pub direction: Axis,
     /// Whether end caps (PEC) are added (default true).
     pub caps: bool,
     /// Resistance (Ω).
@@ -485,14 +483,14 @@ pub struct LumpedElement {
     pub c: Scalar,
     /// Inductance (H).
     pub l: Scalar,
-    /// Element type: 0 = parallel, 1 = series (optional).
-    pub le_type: Option<i32>,
+    /// How R, L and C are connected (`LEtype`, optional in files).
+    pub le_type: Option<LumpedElementType>,
 }
 
 impl Default for LumpedElement {
     fn default() -> Self {
         LumpedElement {
-            direction: 0,
+            direction: Axis::X,
             caps: true,
             r: Scalar::new(f64::NAN),
             c: Scalar::new(f64::NAN),
@@ -505,7 +503,7 @@ impl Default for LumpedElement {
 impl LumpedElement {
     /// Element along axis `direction` with resistance `r` (Ω); C and L
     /// unset.
-    pub fn resistor(direction: i32, r: f64) -> Self {
+    pub fn resistor(direction: Axis, r: f64) -> Self {
         LumpedElement {
             direction,
             r: Scalar::new(r),
@@ -539,6 +537,6 @@ pub struct AbsorbingBC {
     pub normal_sign_positive: bool,
     /// Phase velocity of the absorbed wave (m/s); 0 = speed of light.
     pub phase_velocity: Scalar,
-    /// Boundary type id.
-    pub abc_type: i32,
+    /// Boundary algorithm.
+    pub abc_type: AbcType,
 }

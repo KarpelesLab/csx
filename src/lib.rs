@@ -65,6 +65,6 @@ pub use io::xml::OpenEmsDocument;
 pub use math::{BoundingBox, Mat4, Vec3};
 pub use param::{Parameter, ParameterSet, Scalar, ScalarPoint};
 pub use primitives::{Primitive, Shape};
-pub use properties::{Material, Property, PropertyKind, PropertyType, TypeMask};
+pub use properties::{Axis, Material, Property, PropertyKind, PropertyType, TypeMask};
 pub use structure::{ContinuousStructure, PropertyId};
 pub use transform::{Transform, TransformOp};

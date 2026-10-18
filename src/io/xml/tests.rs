@@ -3,6 +3,7 @@ use crate::coords::CoordSystem;
 use crate::math::Vec3;
 use crate::param::Scalar;
 use crate::primitives::Shape;
+use crate::properties::{DumpMode, DumpType, LumpedElementType};
 use crate::properties::{MaterialQuantity, PropertyKind};
 use crate::{PropertyType, TypeMask};
 
@@ -150,7 +151,7 @@ fn read_sample() {
     };
     assert_eq!(l.r.value(), 50.0);
     assert!(l.c.value().is_nan() && l.l.value().is_nan());
-    assert_eq!(l.le_type, Some(0));
+    assert_eq!(l.le_type, Some(LumpedElementType::Parallel));
 
     let PropertyKind::Excitation(e) = &s.property_by_name("ex").unwrap().kind else {
         panic!()
@@ -173,7 +174,7 @@ fn read_sample() {
     };
     assert_eq!(
         (d.dump_type, d.dump_mode, d.sub_sampling),
-        (10, 2, Some([2, 2, 4]))
+        (DumpType::EFieldFd, DumpMode::Cell, Some([2, 2, 4]))
     );
     assert_eq!(d.opt_resolution.as_ref().unwrap()[2].value(), 1.0);
 
@@ -339,6 +340,63 @@ fn errors() {
     assert!(ContinuousStructure::from_xml_str(bad_face).is_err());
     let empty = ContinuousStructure::from_xml_str("<ContinuousStructure/>").unwrap();
     assert!(empty.properties().is_empty());
+}
+
+#[test]
+fn typed_ids_round_trip() {
+    use crate::properties::{AbcType, Axis, ExcitationType, ProbeType};
+    let xml = r#"<ContinuousStructure><Properties>
+        <Excitation Name="ex" Type="7"/>
+        <ProbeBox Name="p" Type="1.000000e+00" NormDir="2"/>
+        <DumpBox Name="d" DumpType="99" DumpMode="0" FileType="5"/>
+        <LumpedElement Name="l" Direction="1.000000e+00" LEtype="1.000000e+00" R="50"/>
+        <AbsorbingBC Name="a" AbsorbingBoundaryType="MUR_1ST_SA"/>
+    </Properties></ContinuousStructure>"#;
+    let s = ContinuousStructure::from_xml_str(xml).unwrap();
+    let kind = |n: &str| s.property_by_name(n).unwrap().kind.clone();
+    let PropertyKind::Excitation(e) = kind("ex") else {
+        panic!()
+    };
+    assert_eq!(e.excitation_type, ExcitationType::Other(7));
+    let PropertyKind::ProbeBox(p) = kind("p") else {
+        panic!()
+    };
+    assert_eq!(
+        (p.probe_type, p.norm_dir),
+        (ProbeType::Current, Some(Axis::Z))
+    );
+    let PropertyKind::DumpBox(d) = kind("d") else {
+        panic!()
+    };
+    assert_eq!(
+        (d.dump_type, d.dump_mode, d.file_type),
+        (
+            DumpType::Other(99),
+            DumpMode::NoInterpolation,
+            crate::properties::DumpFileType::Other(5)
+        )
+    );
+    let PropertyKind::LumpedElement(l) = kind("l") else {
+        panic!()
+    };
+    assert_eq!(
+        (l.direction, l.le_type),
+        (Axis::Y, Some(LumpedElementType::Series))
+    );
+    let PropertyKind::AbsorbingBC(a) = kind("a") else {
+        panic!()
+    };
+    assert_eq!(a.abc_type, AbcType::Mur1stSa);
+
+    let out = s.to_xml_string();
+    assert!(out.contains("DumpType=\"99\"") && out.contains("FileType=\"5\""));
+    let again = ContinuousStructure::from_xml_str(&out).unwrap();
+    assert_eq!(again.to_xml_string(), out);
+
+    let bad = r#"<ContinuousStructure><Properties><LumpedElement Name="l" Direction="3"/></Properties></ContinuousStructure>"#;
+    assert!(ContinuousStructure::from_xml_str(bad).is_err());
+    let bad = r#"<ContinuousStructure><Properties><ProbeBox Name="p" NormDir="5"/></Properties></ContinuousStructure>"#;
+    assert!(ContinuousStructure::from_xml_str(bad).is_err());
 }
 
 /// Parses every sample file found in `CSX_XML_SAMPLES` (a directory of

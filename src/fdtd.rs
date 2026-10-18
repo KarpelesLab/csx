@@ -258,8 +258,8 @@ pub struct FdtdSettings {
     pub f_max: Option<f64>,
     /// Over-sampling factor of probes (`OverSampling`).
     pub over_sampling: Option<u32>,
-    /// Time step method: 1 = CFL criterion, 3 = Rennings (`TimeStepMethod`).
-    pub time_step_method: Option<i32>,
+    /// Time step method (`TimeStepMethod`).
+    pub time_step_method: Option<TimeStepMethod>,
     /// Maximum simulated time (s) (`MaxTime`).
     pub max_time: Option<f64>,
     /// Fixed time step (s) (`TimeStep`).
@@ -316,6 +316,49 @@ impl FdtdSettings {
             e.evaluator()?;
         }
         Ok(())
+    }
+}
+
+/// How the FDTD time step is chosen (`TimeStepMethod`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimeStepMethod {
+    /// Courant–Friedrichs–Lewy criterion; id 1.
+    Cfl,
+    /// Rennings' criterion (openEMS default); id 3.
+    Rennings,
+    /// An id without a named variant, preserved verbatim.
+    Other(i32),
+}
+
+impl TimeStepMethod {
+    /// Variant for a numeric id (unknown ids become `Other`).
+    pub const fn from_id(id: i32) -> Self {
+        match id {
+            1 => TimeStepMethod::Cfl,
+            3 => TimeStepMethod::Rennings,
+            o => TimeStepMethod::Other(o),
+        }
+    }
+
+    /// Numeric id as used in files.
+    pub const fn id(self) -> i32 {
+        match self {
+            TimeStepMethod::Cfl => 1,
+            TimeStepMethod::Rennings => 3,
+            TimeStepMethod::Other(o) => o,
+        }
+    }
+}
+
+impl From<i32> for TimeStepMethod {
+    fn from(id: i32) -> Self {
+        TimeStepMethod::from_id(id)
+    }
+}
+
+impl From<TimeStepMethod> for i32 {
+    fn from(m: TimeStepMethod) -> i32 {
+        m.id()
     }
 }
 

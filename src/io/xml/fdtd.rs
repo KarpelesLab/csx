@@ -4,7 +4,9 @@ use super::dom::{Element, Node};
 use super::read::Attrs;
 use crate::error::{Error, Result};
 use crate::expr::parse_number_lenient;
-use crate::fdtd::{Boundary, BoundaryConditions, ExcitationSignal, FACE_NAMES, FdtdSettings};
+use crate::fdtd::{
+    Boundary, BoundaryConditions, ExcitationSignal, FACE_NAMES, FdtdSettings, TimeStepMethod,
+};
 use crate::param::format_f64;
 
 fn number(s: &str, what: &str) -> Result<f64> {
@@ -50,7 +52,8 @@ impl FdtdSettings {
             end_criteria: opt_number(&a, &["endCriteria", "EndCriteria"])?,
             f_max: opt_number(&a, &["f_max"])?,
             over_sampling: to_u32(opt_int(&a, &["OverSampling"])?, "OverSampling")?,
-            time_step_method: to_i32(opt_int(&a, &["TimeStepMethod"])?, "TimeStepMethod")?,
+            time_step_method: to_i32(opt_int(&a, &["TimeStepMethod"])?, "TimeStepMethod")?
+                .map(TimeStepMethod::from_id),
             max_time: opt_number(&a, &["MaxTime"])?,
             time_step: opt_number(&a, &["TimeStep"])?,
             time_step_factor: opt_number(&a, &["TimeStepFactor"])?,
@@ -92,7 +95,7 @@ impl FdtdSettings {
             e.set_attr("OverSampling", v.to_string());
         }
         if let Some(v) = self.time_step_method {
-            e.set_attr("TimeStepMethod", v.to_string());
+            e.set_attr("TimeStepMethod", v.id().to_string());
         }
         if let Some(v) = self.cell_constant_material {
             e.set_attr("CellConstantMaterial", if v { "1" } else { "0" });

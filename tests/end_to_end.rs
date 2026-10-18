@@ -66,7 +66,7 @@ fn microstrip() -> ContinuousStructure {
     )
     .unwrap();
     let le = LumpedElement {
-        direction: 2,
+        direction: csx::Axis::Z,
         r: 50.0.into(),
         ..Default::default()
     };
@@ -490,7 +490,7 @@ fn every_type_from_fixture() {
         PropertyKind::LumpedElement(l) => {
             assert_eq!(l.c.value(), 1e-12);
             assert!(l.l.value().is_nan());
-            assert_eq!(l.le_type, Some(1));
+            assert_eq!(l.le_type, Some(csx::properties::LumpedElementType::Series));
         }
         k => panic!("{k:?}"),
     }

@@ -2,9 +2,13 @@
 //! probe, ...). Every property owns the primitives describing *where* it is.
 
 mod kinds;
+mod types;
 mod weight;
 
 pub use kinds::*;
+pub use types::{
+    AbcType, Axis, DumpFileType, DumpMode, DumpType, ExcitationType, LumpedElementType, ProbeType,
+};
 pub use weight::{Aniso, WEIGHT_VARS, WeightFn, weight_vars};
 
 use crate::error::Result;
@@ -460,17 +464,19 @@ mod tests {
     fn constructors() {
         let e = Property::excitation(
             "port",
-            Excitation::new([0.0, 0.0, 1.0]).with_type(1).with_number(2),
+            Excitation::new([0.0, 0.0, 1.0])
+                .with_type(ExcitationType::EFieldHard)
+                .with_number(2),
         );
         let PropertyKind::Excitation(x) = &e.kind else {
             panic!()
         };
         assert_eq!(
             (x.excitation_type, x.number, x.excite[2].value()),
-            (1, 2, 1.0)
+            (ExcitationType::EFieldHard, 2, 1.0)
         );
         assert!(x.enabled);
-        let l = LumpedElement::resistor(2, 50.0).with_c(1e-12);
+        let l = LumpedElement::resistor(Axis::Z, 50.0).with_c(1e-12);
         assert!(l.l.value().is_nan() && l.c.value() == 1e-12);
         assert_eq!(
             Property::lumped_element("r", l.clone()).kind,
@@ -478,11 +484,13 @@ mod tests {
         );
         let p = Property::probe(
             "u",
-            ProbeBox::new(0).with_weight(-1.0).with_frequencies([1e9]),
+            ProbeBox::new(ProbeType::Voltage)
+                .with_weight(-1.0)
+                .with_frequencies([1e9]),
         );
         assert_eq!(p.property_type(), PropertyType::ProbeBox);
         assert_eq!(
-            Property::dump("et", DumpBox::new(10)).property_type(),
+            Property::dump("et", DumpBox::new(DumpType::EFieldFd)).property_type(),
             PropertyType::DumpBox
         );
         let c = Property::conducting_sheet("cu", 5.8e7, 35e-6).with_color(Rgba::new(1, 2, 3, 255));

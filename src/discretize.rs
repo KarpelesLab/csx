@@ -52,7 +52,9 @@ use crate::error::{Error, Result};
 use crate::grid::RectilinearGrid;
 use crate::math::{BoundingBox, Vec3};
 use crate::primitives::{Primitive, Shape};
-use crate::properties::{MaterialQuantity, PropertyKind, PropertyType, TypeMask};
+use crate::properties::{
+    ExcitationType, LumpedElementType, MaterialQuantity, PropertyKind, PropertyType, TypeMask,
+};
 use crate::structure::{ContinuousStructure, SpatialIndex};
 
 /// Options of [`discretize`].
@@ -105,8 +107,8 @@ pub struct ExcitationField {
     pub name: String,
     /// Excitation number.
     pub number: u32,
-    /// Excitation type (0/1: E soft/hard, 2/3: H soft/hard).
-    pub excitation_type: i32,
+    /// Excitation type (E or H field source).
+    pub excitation_type: ExcitationType,
     /// Delay (s).
     pub delay: f64,
     /// Non-zero amplitudes: E edges for E types, H faces for H types.
@@ -128,8 +130,8 @@ pub struct LumpedEdge {
     pub c: f64,
     /// Inductance of this edge (NaN if unset).
     pub l: f64,
-    /// Element type (0 parallel, 1 series) if given.
-    pub le_type: Option<i32>,
+    /// How R, L and C are connected, if given.
+    pub le_type: Option<LumpedElementType>,
     /// Whether PEC caps are requested.
     pub caps: bool,
 }
@@ -325,8 +327,8 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
                     }
                 }
                 PropertyKind::Excitation(ex) => {
-                    let h_type = matches!(ex.excitation_type, 2 | 3);
-                    if !matches!(ex.excitation_type, 0..=3) {
+                    let h_type = ex.excitation_type.is_magnetic();
+                    if !h_type && !ex.excitation_type.is_electric() {
                         warnings.push(format!(
                             "{}: excitation type {} is not discretised",
                             label(),
@@ -367,7 +369,7 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
                     }
                 }
                 PropertyKind::LumpedElement(le) => {
-                    let dir = le.direction.clamp(0, 2) as usize;
+                    let dir = le.direction.index();
                     let edges: Vec<Edge> = ctx
                         .select_edges(prim, &label, &mut warnings, false)
                         .into_iter()
@@ -1254,7 +1256,7 @@ mod tests {
         s.add_primitive(e, BoxShape::new([1.0, 1.0, 1.0], [2.0, 1.0, 3.0]))
             .unwrap();
         let le = LumpedElement {
-            direction: 2,
+            direction: crate::Axis::Z,
             r: Scalar::new(50.0),
             ..Default::default()
         };

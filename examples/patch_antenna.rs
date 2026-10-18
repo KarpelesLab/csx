@@ -83,7 +83,7 @@ fn build() -> csx::Result<ContinuousStructure> {
     let port = ["feed_pos", "-0.5", "0"];
     let port_end = ["feed_pos+1", "0.5", "sub_h"];
     let le = LumpedElement {
-        direction: 2,
+        direction: csx::Axis::Z,
         r: Scalar::new(50.0),
         ..Default::default()
     };
@@ -101,7 +101,7 @@ fn build() -> csx::Result<ContinuousStructure> {
     s.add_primitive(e, Primitive::new(pbox(port, port_end)).with_priority(5))?;
 
     let ut = ProbeBox {
-        probe_type: 0,
+        probe_type: csx::properties::ProbeType::Voltage,
         weight: Scalar::new(-1.0),
         ..Default::default()
     };
@@ -114,8 +114,8 @@ fn build() -> csx::Result<ContinuousStructure> {
         )),
     )?;
     let it = ProbeBox {
-        probe_type: 1,
-        norm_dir: Some(2),
+        probe_type: csx::properties::ProbeType::Current,
+        norm_dir: Some(csx::Axis::Z),
         ..Default::default()
     };
     let i = s.add_property(Property::new("port_it", PropertyKind::ProbeBox(it)));
