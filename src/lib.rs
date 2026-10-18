@@ -47,6 +47,7 @@ pub mod expr;
 pub mod grid;
 pub mod io;
 pub mod math;
+pub mod mesh;
 pub mod param;
 pub mod primitives;
 pub mod properties;
