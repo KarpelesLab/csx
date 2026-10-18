@@ -1,0 +1,169 @@
+//! CSXCAD / openEMS XML files (feature `xml`).
+//!
+//! The reader accepts both geometry-only files (root `<ContinuousStructure>`)
+//! and complete openEMS simulation files (root `<openEMS>` containing
+//! `<FDTD>` and `<ContinuousStructure>`). The writer follows the layout of
+//! the files written by CSXCAD itself: grid, background material, parameter
+//! set and properties; every property carries an `ID`, a `Name`, fill and
+//! edge colours and its primitives.
+//!
+//! Unknown attributes of properties, primitives and the structure are kept
+//! in `extra_attributes` and written back.
+//!
+//! # Format notes
+//!
+//! Most of the format is confirmed by published documentation and files.
+//! The following parts are not documented and use a best guess; the reader
+//! accepts several spellings:
+//!
+//! * `<ParameterSet>` entries: `<Parameter Type="Const|Linear" name=".."
+//!   value=".." Sweep="1" [Start Stop Step]/>`.
+//! * `<RotPoly>`: `RotAxisDir` attribute and `<Angles Start=".." Stop=".."/>`
+//!   (radians); `StartAngle`/`StopAngle` attributes are also read.
+//! * `<Polyhedron>`: `<Vertex>x,y,z</Vertex>` (also `<Vertex X Y Z/>` on
+//!   read) and `<Face>i,j,k</Face>`.
+//! * `<UserDefined>`: `<Equation>` text and `<CoordShift X Y Z/>` origin.
+//! * `<Point>`: `X`, `Y`, `Z` attributes on the element.
+//! * Dispersive materials: pole `n` (1-based) is written with a `_n` suffix
+//!   (`EpsilonDelta_1`, `EpsilonPlasmaFrequency_1`, ...); a name without
+//!   suffix is read as the first pole.
+//! * `<AbsorbingBC>`: `NormalSignPositive`, `PhaseVelocity`,
+//!   `AbsorbingBoundaryType`; `<DiscMaterial>`: `File`, `Scale`.
+//!
+//! Property elements with an unknown name are read as
+//! [`PropertyKind::Unknown`](crate::PropertyKind::Unknown) whose `property`
+//! is the element name, and written back as `<Unknown Property="..">`.
+
+pub mod dom;
+mod read;
+mod write;
+
+use std::path::Path;
+
+pub use dom::{Element, Node};
+
+use crate::error::{Error, Result};
+use crate::structure::ContinuousStructure;
+
+/// A complete openEMS simulation description: the FDTD settings (kept as raw
+/// XML) and the structure.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenEmsDocument {
+    /// The `<FDTD>` element, if present.
+    pub fdtd: Option<Element>,
+    /// The geometry and material model.
+    pub structure: ContinuousStructure,
+    /// Other top-level elements, preserved verbatim.
+    pub extra: Vec<Element>,
+}
+
+impl OpenEmsDocument {
+    /// Parses a document. A bare `<ContinuousStructure>` root yields a
+    /// document without FDTD settings.
+    pub fn from_xml_str(xml: &str) -> Result<Self> {
+        let root = dom::parse(xml)?;
+        match root.name.as_str() {
+            "ContinuousStructure" => Ok(OpenEmsDocument {
+                structure: load_structure(&root)?,
+                ..Default::default()
+            }),
+            "openEMS" => {
+                let mut doc = OpenEmsDocument::default();
+                let mut found = false;
+                for c in root.elements() {
+                    match c.name.as_str() {
+                        "FDTD" if doc.fdtd.is_none() => doc.fdtd = Some(c.clone()),
+                        "ContinuousStructure" if !found => {
+                            doc.structure = load_structure(c)?;
+                            found = true;
+                        }
+                        _ => doc.extra.push(c.clone()),
+                    }
+                }
+                Ok(doc)
+            }
+            other => Err(Error::Format(format!("unexpected root element <{other}>"))),
+        }
+    }
+
+    /// Serialises to an `<openEMS>` document.
+    pub fn to_xml_string(&self) -> String {
+        let mut root = Element::new("openEMS");
+        if let Some(f) = &self.fdtd {
+            root.push(f.clone());
+        }
+        root.push(write::structure(&self.structure));
+        for e in &self.extra {
+            root.push(e.clone());
+        }
+        root.to_document()
+    }
+
+    /// Reads a file; the structure's `base_dir` is set to the file's
+    /// directory.
+    pub fn read_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let mut doc = Self::from_xml_str(&read_text(path)?)?;
+        doc.structure.base_dir = path.parent().map(Path::to_path_buf);
+        Ok(doc)
+    }
+
+    /// Writes the document to a file.
+    pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        std::fs::write(path, self.to_xml_string())?;
+        Ok(())
+    }
+}
+
+fn read_text(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)?;
+    // Legacy files may carry Latin-1 names; decode them byte by byte.
+    Ok(String::from_utf8(bytes)
+        .unwrap_or_else(|e| e.as_bytes().iter().map(|&c| c as char).collect()))
+}
+
+fn load_structure(el: &Element) -> Result<ContinuousStructure> {
+    let mut s = read::structure(el)?;
+    s.update_parameters()?;
+    Ok(s)
+}
+
+impl ContinuousStructure {
+    /// Parses a structure from XML text. The root may be
+    /// `<ContinuousStructure>` or `<openEMS>` (whose structure is used).
+    /// Parametric values are evaluated; external mesh files are not loaded
+    /// until [`ContinuousStructure::update`] is called.
+    pub fn from_xml_str(xml: &str) -> Result<Self> {
+        Ok(OpenEmsDocument::from_xml_str(xml)?.structure)
+    }
+
+    /// Serialises the structure with a `<ContinuousStructure>` root.
+    pub fn to_xml_string(&self) -> String {
+        write::structure(self).to_document()
+    }
+
+    /// The `<ContinuousStructure>` element.
+    pub fn to_xml_element(&self) -> Element {
+        write::structure(self)
+    }
+
+    /// Builds a structure from a `<ContinuousStructure>` element.
+    pub fn from_xml_element(el: &Element) -> Result<Self> {
+        load_structure(el)
+    }
+
+    /// Reads a structure from a file; `base_dir` is set to the file's
+    /// directory.
+    pub fn read_file(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(OpenEmsDocument::read_file(path)?.structure)
+    }
+
+    /// Writes the structure to a file.
+    pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        std::fs::write(path, self.to_xml_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

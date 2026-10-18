@@ -1,0 +1,331 @@
+use super::*;
+use crate::coords::CoordSystem;
+use crate::math::Vec3;
+use crate::primitives::Shape;
+use crate::properties::{MaterialQuantity, PropertyKind};
+use crate::{PropertyType, TypeMask};
+
+const SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<openEMS>
+  <FDTD NumberOfTimesteps="30000" endCriteria="1e-05" f_max="7e9">
+    <Excitation Type="0" f0="0" fc="7e9"/>
+    <BoundaryCond xmin="PML_8" xmax="PML_8" ymin="MUR" ymax="PEC" zmin="PEC" zmax="PMC"/>
+  </FDTD>
+  <ContinuousStructure CoordSystem="0">
+    <Properties>
+      <Material Name="sub" Isotropy="1" Custom="kept">
+        <Property Epsilon="3.38" Kappa="0.0004"/>
+        <Weight Epsilon="1+z, pow(x,2) ,1"/>
+        <Primitives>
+          <Box Priority="1">
+            <P1 X="-10" Y="-10" Z="0"/>
+            <P2 X="10" Y="10" Z="h"/>
+          </Box>
+        </Primitives>
+      </Material>
+      <Metal Name="patch">
+        <FillColor R="200" G="10" B="1" a="128"/>
+        <Primitives>
+          <Polygon Priority="10" Elevation="1.5" NormDir="2" CoordSystem="0">
+            <Vertex X1="0" X2="0"/><Vertex X1="4" X2="0"/><Vertex X1="4" X2="3"/>
+          </Polygon>
+          <Sphere Priority="11" Radius="1">
+            <Center X="0" Y="0" Z="0"/>
+            <Transformation>
+              <Scale Argument="2,1,1"/>
+              <Translate Argument="20, 0, 0"/>
+              <Rotate_Z Argument="0.5"/>
+            </Transformation>
+          </Sphere>
+        </Primitives>
+      </Metal>
+      <LumpedElement Name="R1" Direction="2" Caps="1" R="50" C="nan" L="-nan(ind)" LEtype="0.000000e+00">
+        <Primitives><Box Priority="5"><P1 X="0" Y="0" Z="0"/><P2 X="0" Y="0" Z="1.5"/></Box></Primitives>
+      </LumpedElement>
+      <Excitation Name="ex" Type="0" Excite="0,0,-1" Number="0" Enabled="1" Delay="0">
+        <Weight X="1" Y="1" Z="sin(x)"/>
+        <Primitives><Box Priority="5"><P1 X="0" Y="0" Z="0"/><P2 X="0" Y="0" Z="1.5"/></Box></Primitives>
+      </Excitation>
+      <ProbeBox Name="ut" Type="0" Weight="-1" NormDir="-1" Visible="0">
+        <FD_Samples>1e9,2e9</FD_Samples>
+        <Attributes ModeFunctionX="sin(x)" ModeFunctionY="0" ModeFunctionZ="0"/>
+        <Primitives><Box Priority="0"><P1 X="0" Y="0" Z="0"/><P2 X="0" Y="0" Z="1.5"/></Box></Primitives>
+      </ProbeBox>
+      <DumpBox Name="Et" DumpType="10" DumpMode="2" SubSampling="2,2,4" OptResolution="1">
+        <Primitives><Box Priority="0"><P1 X="-10" Y="0" Z="-10"/><P2 X="10" Y="0" Z="30"/></Box></Primitives>
+      </DumpBox>
+      <DebyeMaterial Name="skin" Isotropy="1">
+        <Property Epsilon="21.6,21.6,21.6" EpsilonDelta_1="19.3,19.3,19.3" EpsilonRelaxTime_1="7e-12" EpsilonDelta_2="2" EpsilonRelaxTime_2="1e-9"/>
+        <Primitives/>
+      </DebyeMaterial>
+      <LorentzMaterial Name="drude" Isotropy="1">
+        <Property Epsilon="4.2" EpsilonPlasmaFrequency="5e9" EpsilonLorPoleFrequency="12.57e9" EpsilonRelaxTime="2.294e-11"/>
+        <Primitives/>
+      </LorentzMaterial>
+      <ConductingSheet Name="cu" Conductivity="5.8e7" Thickness="35e-6">
+        <Primitives>
+          <MultiBox Priority="1"><StartP X="0" Y="0" Z="0"/><EndP X="1" Y="1" Z="0"/><StartP X="2" Y="2" Z="0"/><EndP X="3" Y="3" Z="0"/></MultiBox>
+        </Primitives>
+      </ConductingSheet>
+      <Metal Name="misc">
+        <Primitives>
+          <Cylinder Priority="1" Radius="0.5"><P1 X="0" Y="0" Z="0"/><P2 X="0" Y="0" Z="2"/></Cylinder>
+          <CylindricalShell Priority="1" Radius="1" ShellWidth="0.1"><P1 X="0" Y="0" Z="0"/><P2 X="0" Y="0" Z="2"/></CylindricalShell>
+          <SphericalShell Priority="1" Radius="1" ShellWidth="0.1"><Center X="5" Y="5" Z="5"/></SphericalShell>
+          <LinPoly Priority="1" Elevation="1" Length="3" NormDir="2"><Vertex X1="10" X2="10"/><Vertex X1="10" X2="20"/><Vertex X1="30" X2="20"/></LinPoly>
+          <RotPoly Priority="1" NormDir="1" RotAxisDir="2"><Vertex X1="0" X2="1"/><Vertex X1="1" X2="1"/><Vertex X1="1" X2="2"/><Angles Start="0" Stop="3.14"/></RotPoly>
+          <Curve Priority="0"><Vertex X="0" Y="0" Z="0"></Vertex><Vertex X="1" Y="0" Z="0"/></Curve>
+          <Wire Priority="0" WireRadius="0.1"><Vertex X="0" Y="0" Z="0"/><Vertex X="1" Y="0" Z="0"/></Wire>
+          <Point Priority="1" X="1" Y="1" Z="1"/>
+          <Polyhedron Priority="2">
+            <Vertex>0,0,0</Vertex><Vertex X="1" Y="0" Z="0"/><Vertex>0,1,0</Vertex><Vertex>0,0,1</Vertex>
+            <Face>0,2,1</Face><Face>0,1,3</Face><Face>0,3,2</Face><Face>1,2,3</Face>
+          </Polyhedron>
+          <PolyhedronReader Priority="10" FileName="model.stl" FileType="STL"/>
+          <UserDefined Priority="3"><CoordShift X="1" Y="0" Z="0"/><Equation>x^2+y^2 &lt; 1</Equation></UserDefined>
+          <Box Priority="1" CoordSystem="1"><P1 X="1" Y="0" Z="0"/><P2 X="2" Y="1.5" Z="1"/></Box>
+        </Primitives>
+      </Metal>
+      <ResBox Name="weird" Foo="bar"><Primitives/></ResBox>
+    </Properties>
+    <RectilinearGrid DeltaUnit="0.001" CoordSystem="0">
+      <XLines>-10,0,10,h*2</XLines>
+      <YLines Qty="2">-10, 10</YLines>
+      <ZLines/>
+    </RectilinearGrid>
+    <BackgroundMaterial Epsilon="1" Mue="1" Kappa="0" Sigma="0"/>
+    <ParameterSet>
+      <Parameter Type="Const" name="h" value="1.524" Sweep="1"/>
+    </ParameterSet>
+  </ContinuousStructure>
+</openEMS>
+"#;
+
+#[test]
+fn read_sample() {
+    let doc = OpenEmsDocument::from_xml_str(SAMPLE).unwrap();
+    assert_eq!(doc.fdtd.as_ref().unwrap().attr("f_max"), Some("7e9"));
+    let s = &doc.structure;
+    assert_eq!(s.grid.lines(0), &[-10.0, 0.0, 3.048, 10.0]);
+    assert_eq!(s.grid.lines(1), &[-10.0, 10.0]);
+    assert!(s.grid.lines(2).is_empty());
+    assert_eq!(s.grid.delta_unit, 0.001);
+
+    let sub = s.property_by_name("sub").unwrap();
+    assert_eq!(
+        sub.extra_attributes,
+        vec![("Custom".to_owned(), "kept".to_owned())]
+    );
+    let m = sub.kind.material().unwrap();
+    assert_eq!(m.base_value(MaterialQuantity::Epsilon, 2), 3.38);
+    assert_eq!(
+        m.quantity(MaterialQuantity::Epsilon).weight[1].source(),
+        "pow(x,2)"
+    );
+    assert_eq!(
+        m.value_at(MaterialQuantity::Epsilon, 0, Vec3::new(0.0, 0.0, 1.0)),
+        6.76
+    );
+    // box top at parameter h
+    let hit = s.property_at(
+        Vec3::new(0.0, 0.0, 1.5),
+        CoordSystem::Cartesian,
+        TypeMask::MATERIALS,
+    );
+    assert_eq!(hit.unwrap().property.name, "sub");
+
+    let patch = s.property_by_name("patch").unwrap();
+    assert_eq!(patch.fill_color.r, 200);
+    assert_eq!(patch.fill_color.a, 128);
+    // transformed sphere: scaled ×2 in x, moved to x=20, rotated by 0.5 rad
+    let c = Vec3::new(20.0 * 0.5f64.cos(), 20.0 * 0.5f64.sin(), 0.0);
+    assert!(
+        s.property_at(c, CoordSystem::Cartesian, TypeMask::ANY)
+            .is_some()
+    );
+
+    let PropertyKind::LumpedElement(l) = &s.property_by_name("R1").unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(l.r.value(), 50.0);
+    assert!(l.c.value().is_nan() && l.l.value().is_nan());
+    assert_eq!(l.le_type, Some(0));
+
+    let PropertyKind::Excitation(e) = &s.property_by_name("ex").unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(e.excite[2].value(), -1.0);
+    assert_eq!(e.weight[2].source(), "sin(x)");
+
+    let ut = s.property_by_name("ut").unwrap();
+    assert!(!ut.visible);
+    assert_eq!(ut.attribute("ModeFunctionX"), Some("sin(x)"));
+    let PropertyKind::ProbeBox(p) = &ut.kind else {
+        panic!()
+    };
+    assert_eq!(p.frequencies, vec![1e9, 2e9]);
+    assert_eq!(p.weight.value(), -1.0);
+    assert_eq!(p.norm_dir, None);
+
+    let PropertyKind::DumpBox(d) = &s.property_by_name("Et").unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(
+        (d.dump_type, d.dump_mode, d.sub_sampling),
+        (10, 2, Some([2, 2, 4]))
+    );
+    assert_eq!(d.opt_resolution.as_ref().unwrap()[2].value(), 1.0);
+
+    let PropertyKind::DebyeMaterial(db) = &s.property_by_name("skin").unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(db.poles.len(), 2);
+    assert_eq!(db.poles[1].eps_relax_time.base(0), 1e-9);
+    let PropertyKind::LorentzMaterial(lz) = &s.property_by_name("drude").unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(lz.poles.len(), 1);
+    assert_eq!(lz.poles[0].eps_plasma_frequency.base(1), 5e9);
+
+    let misc = s.property_by_name("misc").unwrap();
+    let names: Vec<_> = misc
+        .primitives
+        .iter()
+        .map(|p| p.shape.type_name())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Cylinder",
+            "CylindricalShell",
+            "SphericalShell",
+            "LinPoly",
+            "RotPoly",
+            "Curve",
+            "Wire",
+            "Point",
+            "Polyhedron",
+            "PolyhedronReader",
+            "UserDefined",
+            "Box"
+        ]
+    );
+    let Shape::Polyhedron(ph) = &misc.primitives[8].shape else {
+        panic!()
+    };
+    assert!(ph.is_closed());
+    assert_eq!(
+        misc.primitives[11].coord_system,
+        Some(CoordSystem::Cylindrical)
+    );
+    assert!(misc.primitives[10].contains(Vec3::new(1.5, 0.0, 0.0), CoordSystem::Cartesian));
+
+    let weird = s.property_by_name("weird").unwrap();
+    assert_eq!(weird.property_type(), PropertyType::Unknown);
+    assert_eq!(s.parameters.get("h"), Some(1.524));
+}
+
+#[test]
+fn roundtrip_is_stable() {
+    let doc = OpenEmsDocument::from_xml_str(SAMPLE).unwrap();
+    let first = doc.to_xml_string();
+    let again = OpenEmsDocument::from_xml_str(&first).unwrap();
+    let second = again.to_xml_string();
+    assert_eq!(first, second);
+    assert_eq!(again.fdtd, doc.fdtd);
+    assert_eq!(
+        again.structure.properties().len(),
+        doc.structure.properties().len()
+    );
+    // Structures compare equal except for NaN-valued scalars.
+    for (a, b) in doc
+        .structure
+        .properties()
+        .iter()
+        .zip(again.structure.properties())
+    {
+        if !matches!(a.kind, PropertyKind::LumpedElement(_)) {
+            assert_eq!(a, b, "{}", a.name);
+        }
+    }
+    assert_eq!(doc.structure.grid, again.structure.grid);
+    assert_eq!(doc.structure.parameters, again.structure.parameters);
+}
+
+#[test]
+fn structure_root_and_files() {
+    let s = ContinuousStructure::from_xml_str(SAMPLE).unwrap();
+    let xml = s.to_xml_string();
+    assert!(xml.starts_with("<?xml"));
+    assert!(xml.contains("<ContinuousStructure CoordSystem=\"0\">"));
+    let t = ContinuousStructure::from_xml_str(&xml).unwrap();
+    assert_eq!(t.to_xml_string(), xml);
+
+    let dir = std::env::temp_dir().join(format!("csx-xml-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.xml");
+    t.write_file(&path).unwrap();
+    let r = ContinuousStructure::read_file(&path).unwrap();
+    assert_eq!(r.base_dir.as_deref(), Some(dir.as_path()));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn degree_transforms_written_in_radians() {
+    let mut s = ContinuousStructure::new();
+    let id = s.add_property(crate::Property::metal("m"));
+    let mut t = crate::Transform::new();
+    t.set_angles_in_degrees(true);
+    t.rotate_axis(2, 90.0);
+    let prim = crate::Primitive::new(crate::primitives::BoxShape::new(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+    ))
+    .with_transform(t);
+    s.add_primitive(id, prim).unwrap();
+    let r = ContinuousStructure::from_xml_str(&s.to_xml_string()).unwrap();
+    let p = &r.properties()[0].primitives[0];
+    assert!(!p.transform.angles_in_degrees());
+    let q = p.transform.apply(Vec3::unit(0));
+    assert!((q - Vec3::unit(1)).norm() < 1e-12);
+}
+
+#[test]
+fn errors() {
+    assert!(ContinuousStructure::from_xml_str("<foo/>").is_err());
+    assert!(ContinuousStructure::from_xml_str("<ContinuousStructure CoordSystem=\"7\"/>").is_err());
+    let bad_prim = "<ContinuousStructure><Properties><Metal Name=\"m\"><Primitives><Blob/></Primitives></Metal></Properties></ContinuousStructure>";
+    assert!(ContinuousStructure::from_xml_str(bad_prim).is_err());
+    let bad_box = "<ContinuousStructure><Properties><Metal Name=\"m\"><Primitives><Box><P1 X=\"0\"/></Box></Primitives></Metal></Properties></ContinuousStructure>";
+    assert!(ContinuousStructure::from_xml_str(bad_box).is_err());
+    let bad_face = "<ContinuousStructure><Properties><Metal Name=\"m\"><Primitives><Polyhedron><Vertex>0,0,0</Vertex><Face>0,1,2</Face></Polyhedron></Primitives></Metal></Properties></ContinuousStructure>";
+    assert!(ContinuousStructure::from_xml_str(bad_face).is_err());
+    let empty = ContinuousStructure::from_xml_str("<ContinuousStructure/>").unwrap();
+    assert!(empty.properties().is_empty());
+}
+
+/// Parses every sample file found in `CSX_XML_SAMPLES` (a directory of
+/// third-party openEMS/CSXCAD files, not distributed with the crate) and
+/// checks that writing and re-reading is stable.
+#[test]
+fn external_samples() {
+    let Some(dir) = std::env::var_os("CSX_XML_SAMPLES") else {
+        return;
+    };
+    let mut n = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "xml" && ext != "csx" {
+            continue;
+        }
+        let doc =
+            OpenEmsDocument::read_file(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let first = doc.to_xml_string();
+        let again = OpenEmsDocument::from_xml_str(&first)
+            .unwrap_or_else(|e| panic!("{} (rewritten): {e}", path.display()));
+        assert_eq!(first, again.to_xml_string(), "{}", path.display());
+        n += 1;
+    }
+    assert!(n > 0);
+}

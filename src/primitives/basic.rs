@@ -161,7 +161,7 @@ impl Sphere {
 }
 
 /// Spherical shell: points whose distance from the center is within
-/// `shell_width / 2` of `radius`.
+/// `|shell_width| / 2` of `radius` (the sign of the width is ignored).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SphericalShell {
     /// Center.
@@ -175,26 +175,29 @@ pub struct SphericalShell {
 impl SphericalShell {
     pub(crate) fn inside(&self, p: Vec3) -> bool {
         let c = self.center.value();
-        let (r, w) = (self.radius.value(), self.shell_width.value() / 2.0);
+        let (r, w) = (self.radius.value(), self.shell_width.value().abs() / 2.0);
         ((p - c).norm() - r).abs() <= w + tol(r, w)
     }
 
     pub(crate) fn bbox(&self) -> BoundingBox {
         let c = self.center.value();
         BoundingBox::from_corners(c, c)
-            .expanded(self.radius.value() + self.shell_width.value() / 2.0)
+            .expanded(self.radius.value() + self.shell_width.value().abs() / 2.0)
     }
 
     pub(crate) fn dimension(&self) -> usize {
-        if self.shell_width.value() > 0.0 { 3 } else { 2 }
+        if self.shell_width.value() != 0.0 {
+            3
+        } else {
+            2
+        }
     }
 
     pub(crate) fn update(&mut self, p: &ParameterSet) -> Result<()> {
         self.center.update(p)?;
         self.radius.update(p)?;
         self.shell_width.update(p)?;
-        check_radius(&self.radius, "radius")?;
-        check_radius(&self.shell_width, "shell width")
+        check_radius(&self.radius, "radius")
     }
 }
 
@@ -275,7 +278,7 @@ impl Cylinder {
     }
 }
 
-/// Cylindrical shell: points within `shell_width / 2` of the cylinder
+/// Cylindrical shell: points within `|shell_width| / 2` of the cylinder
 /// mantle of radius `radius`, between the two end planes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CylindricalShell {
@@ -292,7 +295,7 @@ pub struct CylindricalShell {
 impl CylindricalShell {
     pub(crate) fn inside(&self, p: Vec3) -> bool {
         let (a, b) = (self.start.value(), self.stop.value());
-        let (r, w) = (self.radius.value(), self.shell_width.value() / 2.0);
+        let (r, w) = (self.radius.value(), self.shell_width.value().abs() / 2.0);
         match axial(a, b, p) {
             Some((t, d, len)) => {
                 let tt = tol(len, 0.0) / len;
@@ -304,11 +307,19 @@ impl CylindricalShell {
 
     pub(crate) fn bbox(&self) -> BoundingBox {
         let (a, b) = (self.start.value(), self.stop.value());
-        cylinder_bbox(a, b, self.radius.value() + self.shell_width.value() / 2.0)
+        cylinder_bbox(
+            a,
+            b,
+            self.radius.value() + self.shell_width.value().abs() / 2.0,
+        )
     }
 
     pub(crate) fn dimension(&self) -> usize {
-        if self.shell_width.value() > 0.0 { 3 } else { 2 }
+        if self.shell_width.value() != 0.0 {
+            3
+        } else {
+            2
+        }
     }
 
     pub(crate) fn update(&mut self, p: &ParameterSet) -> Result<()> {
@@ -316,7 +327,6 @@ impl CylindricalShell {
         self.stop.update(p)?;
         self.radius.update(p)?;
         self.shell_width.update(p)?;
-        check_radius(&self.radius, "radius")?;
-        check_radius(&self.shell_width, "shell width")
+        check_radius(&self.radius, "radius")
     }
 }

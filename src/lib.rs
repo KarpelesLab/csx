@@ -57,6 +57,8 @@ pub mod transform;
 pub use coords::CoordSystem;
 pub use error::{Error, Result};
 pub use grid::RectilinearGrid;
+#[cfg(feature = "xml")]
+pub use io::xml::OpenEmsDocument;
 pub use math::{BoundingBox, Mat4, Vec3};
 pub use param::{Parameter, ParameterSet, Scalar, ScalarPoint};
 pub use primitives::{Primitive, Shape};

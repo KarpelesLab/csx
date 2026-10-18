@@ -192,10 +192,8 @@ impl ContinuousStructure {
     /// Re-evaluates every parametric value against [`Self::parameters`] and
     /// loads external mesh files of `PolyhedronReader` primitives.
     pub fn update(&mut self) -> Result<()> {
-        let params = &self.parameters;
-        self.background.update(params)?;
+        self.update_parameters()?;
         for p in &mut self.properties {
-            p.update(params)?;
             for prim in &mut p.primitives {
                 if let Shape::PolyhedronReader(r) = &mut prim.shape
                     && r.mesh.is_none()
@@ -203,6 +201,17 @@ impl ContinuousStructure {
                     r.load(self.base_dir.as_deref())?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Re-evaluates every parametric value against [`Self::parameters`]
+    /// without touching external files.
+    pub fn update_parameters(&mut self) -> Result<()> {
+        let params = &self.parameters;
+        self.background.update(params)?;
+        for p in &mut self.properties {
+            p.update(params)?;
         }
         Ok(())
     }
