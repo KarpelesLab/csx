@@ -112,9 +112,15 @@ black-box runs of CSXCAD 0.7 (its Python API, never its source):
 * Coordinate systems: a `Box` in cylindrical coordinates is an annular
   sector; spheres, cylinders, their shells, curves, wires and points convert
   their defining points from `(ρ, α, z)`; multi-boxes, polygons, extruded and
-  revolved polygons and polyhedra are always Cartesian. Primitives without
-  `CoordSystem` inherit the structure's; structure queries take coordinates
-  in the structure's system.
+  revolved polygons and polyhedra are always Cartesian. Multi-boxes ignore
+  their own `CoordSystem` and compare raw coordinates in the structure's
+  system (no angle wrapping). Primitives without `CoordSystem` inherit the
+  structure's; structure queries take coordinates in the structure's system.
+  A cylindrical box compares cylindrical queries as given (negative `ρ` is
+  outside, `α` modulo 2π); every other shape folds `(-ρ, α)` through the
+  Cartesian conversion. Verified with 140k random cylindrical-structure
+  queries. Known divergence: CSXCAD clips cylindrical wires to an
+  inconsistently computed bounding box; csx keeps the true geometry.
 * Curves and points never contain a point.
 * Equal priorities: the earlier property wins.
 * Transformations are applied in list order; angles are radians in files;

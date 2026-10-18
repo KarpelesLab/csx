@@ -470,11 +470,7 @@ impl<'a> SpatialIndex<'a> {
         cand.sort_unstable();
         cand.iter()
             .map(|&i| &self.entries[i as usize])
-            .find(|e| {
-                e.hit
-                    .primitive
-                    .contains_in(c, CoordSystem::Cartesian, self.default_cs)
-            })
+            .find(|e| e.hit.primitive.contains_in(p, self.cs, self.default_cs))
             .map(|e| e.hit)
     }
 }

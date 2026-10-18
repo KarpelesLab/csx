@@ -31,6 +31,11 @@ impl BoxShape {
         inside_box(self.start.value(), self.stop.value(), p, cs)
     }
 
+    /// Inside test for a point already expressed in `cs`.
+    pub(crate) fn inside_native(&self, c: Vec3, cs: CoordSystem) -> bool {
+        inside_box_native(self.start.value(), self.stop.value(), c, cs)
+    }
+
     pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
         box_bbox(self.start.value(), self.stop.value(), cs)
     }
@@ -52,10 +57,17 @@ impl BoxShape {
 /// Inside test for a box whose corners `a`, `b` are expressed in `cs`, for
 /// the Cartesian point `p`.
 pub(crate) fn inside_box(a: Vec3, b: Vec3, p: Vec3, cs: CoordSystem) -> bool {
+    inside_box_native(a, b, cs.from_cartesian(p), cs)
+}
+
+/// Inside test for a box whose corners `a`, `b` are expressed in `cs`, for a
+/// point `c` given in the same coordinate system. In cylindrical
+/// coordinates the radius is compared as given (a negative `ρ` is outside)
+/// and the angle modulo 2π.
+pub(crate) fn inside_box_native(a: Vec3, b: Vec3, c: Vec3, cs: CoordSystem) -> bool {
     match cs {
-        CoordSystem::Cartesian => (0..3).all(|i| in_range(p[i], a[i], b[i])),
+        CoordSystem::Cartesian => (0..3).all(|i| in_range(c[i], a[i], b[i])),
         CoordSystem::Cylindrical => {
-            let c = cs.from_cartesian(p);
             if !in_range(c[2], a[2], b[2]) || !in_range(c[0], a[0], b[0]) {
                 return false;
             }
@@ -72,8 +84,13 @@ pub(crate) fn box_bbox(a: Vec3, b: Vec3, cs: CoordSystem) -> BoundingBox {
     }
 }
 
-/// A union of axis-aligned boxes. Unlike [`BoxShape`], a multi-box is always
-/// Cartesian (as in CSXCAD), whatever the primitive's coordinate system.
+/// A union of axis-aligned boxes.
+///
+/// Unlike [`BoxShape`], a multi-box ignores the primitive's own coordinate
+/// system (as in CSXCAD): its corners are in the *structure's* coordinate
+/// system and are compared component-wise with the query coordinates,
+/// without any angle wrapping (in a cylindrical structure a multi-box is a
+/// set of plain `(ρ, α, z)` ranges).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MultiBox {
     /// Pairs of opposite corners.
@@ -81,15 +98,29 @@ pub struct MultiBox {
 }
 
 impl MultiBox {
-    pub(crate) fn inside(&self, p: Vec3) -> bool {
-        self.boxes
-            .iter()
-            .any(|(a, b)| inside_box(a.value(), b.value(), p, CoordSystem::Cartesian))
+    /// Inside test for the Cartesian point `p`, corners in `cs`.
+    pub(crate) fn inside(&self, p: Vec3, cs: CoordSystem) -> bool {
+        self.inside_native(cs.from_cartesian(p))
     }
 
-    pub(crate) fn bbox(&self) -> BoundingBox {
+    /// Inside test for a point expressed in the corners' coordinate system.
+    pub(crate) fn inside_native(&self, c: Vec3) -> bool {
+        self.boxes.iter().any(|(a, b)| {
+            let (a, b) = (a.value(), b.value());
+            (0..3).all(|i| in_range(c[i], a[i], b[i]))
+        })
+    }
+
+    pub(crate) fn bbox(&self, cs: CoordSystem) -> BoundingBox {
         self.boxes.iter().fold(BoundingBox::EMPTY, |acc, (a, b)| {
-            acc.union(&box_bbox(a.value(), b.value(), CoordSystem::Cartesian))
+            acc.union(&box_bbox(a.value(), b.value(), cs))
+        })
+    }
+
+    /// Bounds in the corners' own coordinate system.
+    pub(crate) fn native(&self) -> BoundingBox {
+        self.boxes.iter().fold(BoundingBox::EMPTY, |acc, (a, b)| {
+            acc.union(&BoundingBox::from_corners(a.value(), b.value()))
         })
     }
 

@@ -488,7 +488,9 @@ pub fn tessellate(
 ) -> TriMesh {
     let mut s = Soup::default();
     let cs = prim.effective_cs(default_cs);
-    let mut mesh = match &prim.shape {
+    // Point-defined shapes are converted to Cartesian; boxes keep `cs`.
+    let shape = prim.shape.to_cartesian(cs);
+    let mut mesh = match &*shape {
         Shape::Box(b) => {
             box_shape(&mut s, b.start.value(), b.stop.value(), cs, opts);
             s.finish()
@@ -497,7 +499,14 @@ pub fn tessellate(
             let mut out = TriMesh::new();
             for (a, b) in &m.boxes {
                 let mut t = Soup::default();
-                box_shape(&mut t, a.value(), b.value(), cs, opts);
+                // Multi-boxes use the structure's coordinate system.
+                box_shape(
+                    &mut t,
+                    a.value(),
+                    b.value(),
+                    prim.shape_cs(default_cs),
+                    opts,
+                );
                 out.append(&t.finish());
             }
             out
@@ -595,8 +604,11 @@ pub fn tessellate(
 }
 
 /// World-space polyline of a curve or wire primitive (empty for others).
-pub fn polyline(prim: &Primitive) -> Vec<Vec3> {
-    let pts: Vec<Vec3> = match &prim.shape {
+/// `default_cs` is the structure's coordinate system; vertices of
+/// primitives in a cylindrical system are converted from `(ρ, α, z)`.
+pub fn polyline(prim: &Primitive, default_cs: CoordSystem) -> Vec<Vec3> {
+    let shape = prim.cartesian_shape(default_cs);
+    let pts: Vec<Vec3> = match &*shape {
         Shape::Curve(c) => c.points.iter().map(|p| p.value()).collect(),
         Shape::Wire(w) => w.points.iter().map(|p| p.value()).collect(),
         _ => return Vec::new(),
@@ -641,7 +653,7 @@ pub fn tessellate_structure(
                 primitive_index: k,
                 priority: prim.priority,
                 mesh: tessellate(prim, s.coord_system, opts),
-                polyline: polyline(prim),
+                polyline: polyline(prim, s.coord_system),
             });
         }
     }
@@ -656,6 +668,7 @@ mod tests {
         Wire,
     };
     use crate::transform::Transform;
+    use core::f64::consts::FRAC_PI_2;
 
     /// Deterministic LCG in [0, 1).
     struct Lcg(u64);
@@ -920,7 +933,7 @@ mod tests {
         ));
         let m = tessellate(&w, CoordSystem::Cartesian, &opts());
         assert!(!m.is_empty());
-        assert_eq!(polyline(&w).len(), 3);
+        assert_eq!(polyline(&w, CoordSystem::Cartesian).len(), 3);
         let mut t = Transform::new();
         t.scale(2.0).translate(Vec3::new(5.0, 0.0, 0.0));
         let b = Primitive::new(BoxShape::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])).with_transform(t);
@@ -964,5 +977,55 @@ mod tests {
         let o = TessellationOptions::default();
         assert_eq!(o.arc_segments(1e300), o.arc_segments(TAU));
         assert_eq!(o.arc_segments(f64::NAN), 1);
+    }
+
+    #[test]
+    fn cylindrical_point_defined_shapes() {
+        let cyl = CoordSystem::Cylindrical;
+        let o = TessellationOptions::default();
+        // Cylinder along z at (rho=1, alpha=pi/2) → axis at (0, 1).
+        let c = Primitive::new(Cylinder::new(
+            [1.0, FRAC_PI_2, 0.0],
+            [1.0, FRAC_PI_2, 2.0],
+            0.5,
+        ))
+        .with_coord_system(cyl);
+        let b = tessellate(&c, CoordSystem::Cartesian, &o).bounding_box();
+        assert!((b.min - Vec3::new(-0.5, 0.5, 0.0)).norm() < 1e-9, "{b:?}");
+        assert!((b.max - Vec3::new(0.5, 1.5, 2.0)).norm() < 1e-9, "{b:?}");
+        // Sphere with the inherited (cylindrical) system.
+        let s = Primitive::new(Sphere::new([2.0, core::f64::consts::PI, 0.0], 1.0));
+        let b = tessellate(&s, cyl, &o).bounding_box();
+        assert!(
+            (b.center() - Vec3::new(-2.0, 0.0, 0.0)).norm() < 1e-9,
+            "{b:?}"
+        );
+        assert!(tessellate(&s, cyl, &o).to_polyhedron().unwrap().is_closed());
+        // Spherical shell and cylindrical shell move the same way.
+        let sh = Primitive::new(SphericalShell {
+            center: [2.0, FRAC_PI_2, 0.0].into(),
+            radius: 1.0.into(),
+            shell_width: 0.2.into(),
+        })
+        .with_coord_system(cyl);
+        let b = tessellate(&sh, CoordSystem::Cartesian, &o).bounding_box();
+        assert!((b.center() - Vec3::new(0.0, 2.0, 0.0)).norm() < 1e-9);
+        let csh = Primitive::new(CylindricalShell {
+            start: [2.0, 0.0, 0.0].into(),
+            stop: [2.0, 0.0, 1.0].into(),
+            radius: 0.5.into(),
+            shell_width: 0.1.into(),
+        })
+        .with_coord_system(cyl);
+        let b = tessellate(&csh, CoordSystem::Cartesian, &o).bounding_box();
+        assert!((b.center() - Vec3::new(2.0, 0.0, 0.5)).norm() < 1e-9);
+        // Wire tube and polyline.
+        let w = Primitive::new(Wire::new([[1.0, 0.0, 0.0], [1.0, FRAC_PI_2, 0.0]], 0.1))
+            .with_coord_system(cyl);
+        let pl = polyline(&w, CoordSystem::Cartesian);
+        assert!((pl[1] - Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-12);
+        let b = tessellate(&w, CoordSystem::Cartesian, &o).bounding_box();
+        let e = 1.0 + 0.1 * core::f64::consts::FRAC_1_SQRT_2;
+        assert!((b.max - Vec3::new(e, e, 0.1)).norm() < 1e-9, "{b:?}");
     }
 }

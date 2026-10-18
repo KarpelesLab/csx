@@ -9,9 +9,31 @@
 //! Inside tests take a point together with the coordinate system it is
 //! expressed in. The point is converted to Cartesian coordinates, mapped
 //! through the inverse transformation into the primitive's local frame and
-//! tested against the shape. Only boxes (and multi-boxes) interpret their
-//! values in the primitive's coordinate system — in cylindrical coordinates
-//! they describe annular sectors; every other shape is always Cartesian.
+//! tested against the shape.
+//!
+//! # Coordinate systems
+//!
+//! The semantics below match CSXCAD 0.7 (verified black-box with random
+//! models and point queries):
+//!
+//! * A [`BoxShape`] in cylindrical coordinates is an annular sector. Queried
+//!   with cylindrical coordinates it compares them as given: a negative `ρ`
+//!   is outside and `α` is taken modulo 2π.
+//! * A [`MultiBox`] ignores its own coordinate system: its corners are in the
+//!   structure's system and are compared component-wise, without angle
+//!   wrapping.
+//! * Point-defined shapes (spheres, cylinders, their shells, curves, wires,
+//!   points) convert their defining points from `(ρ, α, z)` when their
+//!   coordinate system is cylindrical; the geometry itself is Euclidean
+//!   (straight wire segments, round spheres). See [`Shape::to_cartesian`].
+//! * Polygon based shapes and polyhedra are always Cartesian.
+//! * Shapes other than boxes see query points through the Cartesian
+//!   conversion, so `(-ρ, α)` is the same point as `(ρ, α + π)`.
+//!
+//! Known divergence: CSXCAD 0.7 clips cylindrical-coordinate wires to a
+//! bounding box that it computes inconsistently (it can even be inverted),
+//! so parts of such wires are invisible to CSXCAD; this crate uses the true
+//! geometry.
 
 mod basic;
 pub(crate) mod bvh;
@@ -29,10 +51,12 @@ pub use user::{USER_VARS, UserDefined};
 
 pub(crate) use geom::cartesian_bbox_to_cylindrical;
 
+use std::borrow::Cow;
+
 use crate::coords::CoordSystem;
 use crate::error::Result;
 use crate::math::{BoundingBox, Vec3};
-use crate::param::ParameterSet;
+use crate::param::{ParameterSet, ScalarPoint};
 use crate::transform::Transform;
 
 /// Mesh file formats understood by [`PolyhedronReader`].
@@ -201,6 +225,71 @@ pub enum Shape {
 }
 
 impl Shape {
+    /// True for shapes defined by points (centres, axis end points, polyline
+    /// vertices) that are converted from `(ρ, α, z)` when the primitive's
+    /// coordinate system is cylindrical: spheres, cylinders, their shells,
+    /// curves, wires and points.
+    pub fn is_point_defined(&self) -> bool {
+        matches!(
+            self,
+            Shape::Sphere(_)
+                | Shape::SphericalShell(_)
+                | Shape::Cylinder(_)
+                | Shape::CylindricalShell(_)
+                | Shape::Curve(_)
+                | Shape::Wire(_)
+                | Shape::Point(_)
+        )
+    }
+
+    /// The shape with its defining points expressed in Cartesian
+    /// coordinates, given the coordinate system `cs` they are written in.
+    ///
+    /// Point-defined shapes (see [`Shape::is_point_defined`]) in a
+    /// cylindrical system get their points converted (expressions are
+    /// replaced by their current values); every other shape is returned
+    /// unchanged — boxes keep interpreting their corners in `cs`, polygon
+    /// based shapes and polyhedra are always Cartesian. After this, every
+    /// shape except boxes can be read as Cartesian geometry.
+    pub fn to_cartesian(&self, cs: CoordSystem) -> Cow<'_, Shape> {
+        if cs == CoordSystem::Cartesian || !self.is_point_defined() {
+            return Cow::Borrowed(self);
+        }
+        let conv = |p: &ScalarPoint| ScalarPoint::from(cs.to_cartesian(p.value()));
+        let convs = |v: &[ScalarPoint]| v.iter().map(conv).collect::<Vec<_>>();
+        Cow::Owned(match self {
+            Shape::Sphere(s) => Shape::Sphere(Sphere {
+                center: conv(&s.center),
+                ..s.clone()
+            }),
+            Shape::SphericalShell(s) => Shape::SphericalShell(SphericalShell {
+                center: conv(&s.center),
+                ..s.clone()
+            }),
+            Shape::Cylinder(c) => Shape::Cylinder(Cylinder {
+                start: conv(&c.start),
+                stop: conv(&c.stop),
+                ..c.clone()
+            }),
+            Shape::CylindricalShell(c) => Shape::CylindricalShell(CylindricalShell {
+                start: conv(&c.start),
+                stop: conv(&c.stop),
+                ..c.clone()
+            }),
+            Shape::Curve(c) => Shape::Curve(Curve {
+                points: convs(&c.points),
+            }),
+            Shape::Wire(w) => Shape::Wire(Wire {
+                points: convs(&w.points),
+                ..w.clone()
+            }),
+            Shape::Point(p) => Shape::Point(PointShape {
+                point: conv(&p.point),
+            }),
+            other => other.clone(),
+        })
+    }
+
     /// Element name used in CSXCAD files.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -227,7 +316,7 @@ impl Shape {
     pub fn contains_local(&self, p: Vec3, cs: CoordSystem) -> bool {
         match self {
             Shape::Box(s) => s.inside(p, cs),
-            Shape::MultiBox(s) => s.inside(p),
+            Shape::MultiBox(s) => s.inside(p, cs),
             Shape::Sphere(s) => s.inside(p, cs),
             Shape::SphericalShell(s) => s.inside(p, cs),
             Shape::Cylinder(s) => s.inside(p, cs),
@@ -248,7 +337,7 @@ impl Shape {
     pub fn local_bbox(&self, cs: CoordSystem) -> BoundingBox {
         match self {
             Shape::Box(s) => s.bbox(cs),
-            Shape::MultiBox(s) => s.bbox(),
+            Shape::MultiBox(s) => s.bbox(cs),
             Shape::Sphere(s) => s.bbox(cs),
             Shape::SphericalShell(s) => s.bbox(cs),
             Shape::Cylinder(s) => s.bbox(cs),
@@ -269,10 +358,11 @@ impl Shape {
     }
 
     /// Bounds expressed in the shape's own coordinate system, for the shapes
-    /// whose interpretation depends on it (boxes).
+    /// whose interpretation depends on it (boxes and multi-boxes).
     fn native_bbox(&self) -> Option<BoundingBox> {
         match self {
             Shape::Box(s) => Some(s.native()),
+            Shape::MultiBox(s) => Some(s.native()),
             _ => None,
         }
     }
@@ -398,9 +488,30 @@ impl Primitive {
         self.coord_system.unwrap_or(default)
     }
 
+    /// The shape in local Cartesian form (see [`Shape::to_cartesian`]),
+    /// given the structure's default coordinate system.
+    pub fn cartesian_shape(&self, default_cs: CoordSystem) -> Cow<'_, Shape> {
+        self.shape.to_cartesian(self.effective_cs(default_cs))
+    }
+
     /// Inside test for `p` expressed in `p_cs`, with `default_cs` used when
     /// the primitive does not define its own coordinate system.
+    ///
+    /// As in CSXCAD, an untransformed box (or multi-box) whose values are in
+    /// the query's (cylindrical) coordinate system compares the query
+    /// coordinates as given: a negative radius `ρ < 0` is outside a
+    /// cylindrical box. Every other shape receives the point converted to
+    /// Cartesian coordinates, where `(-ρ, α)` is the same point as
+    /// `(ρ, α + π)`.
     pub fn contains_in(&self, p: Vec3, p_cs: CoordSystem, default_cs: CoordSystem) -> bool {
+        let scs = self.shape_cs(default_cs);
+        if p_cs == scs && scs != CoordSystem::Cartesian && self.transform.is_empty() {
+            match &self.shape {
+                Shape::Box(b) => return b.inside_native(p, scs),
+                Shape::MultiBox(m) => return m.inside_native(p),
+                _ => {}
+            }
+        }
         let mut c = p_cs.to_cartesian(p);
         if !self.transform.is_empty() {
             if !self.transform.is_invertible() {
@@ -408,7 +519,17 @@ impl Primitive {
             }
             c = self.transform.apply_inverse(c);
         }
-        self.shape.contains_local(c, self.effective_cs(default_cs))
+        self.shape.contains_local(c, scs)
+    }
+
+    /// The coordinate system in which the shape's values are interpreted:
+    /// the effective coordinate system, except for multi-boxes, which always
+    /// use the structure's (`default_cs`).
+    pub fn shape_cs(&self, default_cs: CoordSystem) -> CoordSystem {
+        match self.shape {
+            Shape::MultiBox(_) => default_cs,
+            _ => self.effective_cs(default_cs),
+        }
     }
 
     /// Inside test for `p` expressed in `p_cs` (default coordinate system:
@@ -419,7 +540,7 @@ impl Primitive {
 
     /// World-space Cartesian bounding box.
     pub fn bounding_box(&self, default_cs: CoordSystem) -> BoundingBox {
-        let b = self.shape.local_bbox(self.effective_cs(default_cs));
+        let b = self.shape.local_bbox(self.shape_cs(default_cs));
         if self.transform.is_empty() || b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
             // Unbounded shapes stay unbounded (transforming infinite corners
             // would produce NaN).
@@ -434,14 +555,18 @@ impl Primitive {
     /// multi-boxes defined in cylindrical coordinates and conservative
     /// otherwise.
     pub fn bounding_box_in(&self, target: CoordSystem, default_cs: CoordSystem) -> BoundingBox {
-        let cs = self.effective_cs(default_cs);
+        let cs = self.shape_cs(default_cs);
         if cs == target
             && self.transform.is_empty()
             && let Some(b) = self.shape.native_bbox()
         {
+            // Multi-boxes compare angles without wrapping, so their ranges
+            // are kept as written.
             return match target {
-                CoordSystem::Cartesian => b,
-                CoordSystem::Cylindrical => normalize_alpha(b),
+                CoordSystem::Cylindrical if matches!(self.shape, Shape::Box(_)) => {
+                    normalize_alpha(b)
+                }
+                _ => b,
             };
         }
         let b = self.bounding_box(default_cs);
@@ -665,5 +790,85 @@ mod tests {
             p.bounding_box(CoordSystem::Cartesian).max,
             Vec3::new(2.0, 2.0, 2.0)
         );
+    }
+
+    #[test]
+    fn cartesian_shape_conversion() {
+        let cyl = CoordSystem::Cylindrical;
+        // Sphere centred at rho=2, alpha=pi/2 → (0, 2, 1).
+        let s = Primitive::new(Sphere::new([2.0, FRAC_PI_2, 1.0], 0.5)).with_coord_system(cyl);
+        let c = s.cartesian_shape(CoordSystem::Cartesian);
+        let Shape::Sphere(sp) = &*c else { panic!() };
+        assert!((sp.center.value() - Vec3::new(0.0, 2.0, 1.0)).norm() < 1e-12);
+        assert!(s.contains(Vec3::new(0.0, 2.0, 1.2), CoordSystem::Cartesian));
+        // Inherited coordinate system.
+        let w = Primitive::new(Wire::new([[1.0, 0.0, 0.0], [1.0, PI, 0.0]], 0.1));
+        let Shape::Wire(cw) = &*w.cartesian_shape(cyl) else {
+            panic!()
+        };
+        assert!((cw.points[1].value() - Vec3::new(-1.0, 0.0, 0.0)).norm() < 1e-12);
+        assert_eq!(cw.radius.value(), 0.1);
+        // Boxes, polygons and Cartesian shapes are borrowed unchanged.
+        let b =
+            Primitive::new(BoxShape::new([1.0, 0.0, 0.0], [2.0, 1.0, 1.0])).with_coord_system(cyl);
+        assert!(matches!(b.cartesian_shape(cyl), Cow::Borrowed(_)));
+        assert!(matches!(
+            s.cartesian_shape(CoordSystem::Cartesian),
+            Cow::Owned(_)
+        ));
+        let cart = Primitive::new(Sphere::new([2.0, 0.0, 0.0], 1.0));
+        assert!(matches!(
+            cart.cartesian_shape(CoordSystem::Cartesian),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    /// Raw versus converted cylindrical queries (verified black-box against
+    /// CSXCAD 0.7).
+    #[test]
+    fn cylindrical_query_semantics() {
+        let cyl = CoordSystem::Cylindrical;
+        // A cylindrical box compares the query's (ρ, α, z) as given: a
+        // negative radius is outside even if (-ρ, α) folds into the sector.
+        let sector =
+            Primitive::new(BoxShape::new([0.5, -0.5, 0.0], [2.0, 0.5, 1.0])).with_coord_system(cyl);
+        assert!(sector.contains_in(Vec3::new(1.0, 0.0, 0.5), cyl, cyl));
+        assert!(!sector.contains_in(Vec3::new(-1.0, PI, 0.5), cyl, cyl));
+        assert!(!sector.contains_in(Vec3::new(-1.0, 0.0, 0.5), cyl, cyl));
+        // ... with the angle taken modulo 2π.
+        assert!(sector.contains_in(Vec3::new(1.0, 2.0 * PI, 0.5), cyl, cyl));
+        // Cartesian queries go through the conversion.
+        let cart = CoordSystem::Cartesian;
+        assert!(sector.contains_in(Vec3::new(1.0, 0.0, 0.5), cart, cyl));
+        // Every other shape folds a negative radius through the Cartesian
+        // conversion: (-1, 0) is the point (-1, 0, z).
+        let b = Primitive::new(BoxShape::new([-2.0, -1.0, 0.0], [0.0, 1.0, 1.0]))
+            .with_coord_system(cart);
+        assert!(b.contains_in(Vec3::new(-1.0, 0.0, 0.5), cyl, cyl));
+        assert!(b.contains_in(Vec3::new(1.0, PI, 0.5), cyl, cyl));
+        let s = Primitive::new(Sphere::new([-1.0, 0.0, 0.0], 0.5)).with_coord_system(cart);
+        assert!(s.contains_in(Vec3::new(-1.0, 0.0, 0.0), cyl, cyl));
+        let all = Primitive::new(UserDefined::new("1"));
+        assert!(all.contains_in(Vec3::new(-1.0, 0.3, 0.0), cyl, cyl));
+        // A multi-box uses the structure's coordinate system whatever its
+        // own, and compares without angle wrapping.
+        let m = Primitive::new(MultiBox {
+            boxes: vec![([1.0, -1.0, 0.0].into(), [2.0, 1.0, 1.0].into())],
+        })
+        .with_coord_system(cart);
+        assert!(m.contains_in(Vec3::new(1.5, 0.0, 0.5), cyl, cyl));
+        assert!(!m.contains_in(Vec3::new(1.5, 2.0 * PI, 0.5), cyl, cyl));
+        assert!(!m.contains_in(Vec3::new(-1.5, PI, 0.5), cyl, cyl));
+        // In a Cartesian structure the same multi-box is Cartesian, even
+        // when flagged cylindrical.
+        let m = m.with_coord_system(cyl);
+        assert!(m.contains_in(Vec3::new(1.5, 0.5, 0.5), cart, cart));
+        assert!(!m.contains_in(Vec3::new(1.5, 1.5, 0.5), cart, cart));
+        assert_eq!(m.shape_cs(cart), cart);
+        assert_eq!(m.shape_cs(cyl), cyl);
+        // Its cylindrical bounds are the raw ranges.
+        let nb = m.bounding_box_in(cyl, cyl);
+        assert_eq!(nb.min, Vec3::new(1.0, -1.0, 0.0));
+        assert_eq!(nb.max, Vec3::new(2.0, 1.0, 1.0));
     }
 }

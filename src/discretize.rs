@@ -768,7 +768,10 @@ impl Ctx<'_> {
                         let mut p = self.edge_mid(d, self.flat(n));
                         p[a1] = b.min[a1];
                         p[a2] = b.min[a2];
-                        if self.contains(prim, p) {
+                        // A one-dimensional shape that is flat in two axes
+                        // covers its whole extent (curves contain no point,
+                        // so the inside test cannot be used for them).
+                        if dim == 1 || self.contains(prim, p) {
                             out.push(Edge {
                                 dir: d,
                                 index: self.flat(n),
@@ -917,7 +920,11 @@ impl Ctx<'_> {
         label: &dyn Fn() -> String,
         warnings: &mut Vec<String>,
     ) -> Vec<Edge> {
-        let pts: Vec<Vec3> = match &prim.shape {
+        // Curve and wire vertices are converted from (ρ, α, z) when the
+        // primitive is cylindrical; box corners stay in the primitive's
+        // coordinate system and are converted below.
+        let shape = prim.cartesian_shape(self.s.coord_system);
+        let pts: Vec<Vec3> = match &*shape {
             Shape::Curve(c) => c.points.iter().map(|p| p.value()).collect(),
             Shape::Wire(w) => w.points.iter().map(|p| p.value()).collect(),
             Shape::Box(bx) => vec![bx.start.value(), bx.stop.value()],
@@ -1342,5 +1349,57 @@ mod tests {
         assert!(!g.edge_exists(0, [2, 0, 0]));
         assert!(g.face_exists(2, [1, 2, 4]));
         assert!(!g.face_exists(2, [2, 2, 4]));
+    }
+
+    #[test]
+    fn cylindrical_curve_and_wire_in_cartesian_grid() {
+        use crate::primitives::Wire;
+        let cyl = CoordSystem::Cylindrical;
+        let mut s = ContinuousStructure::new();
+        let l = lines(4);
+        grid(&mut s, [&l, &l, &l]);
+        let id = s.add_property(Property::metal("c"));
+        // (rho=1, alpha=pi/2) → x=0, y=1: a straight line along z.
+        s.add_primitive(
+            id,
+            Primitive::new(Curve::new([
+                [1.0, core::f64::consts::FRAC_PI_2, 0.0],
+                [1.0, core::f64::consts::FRAC_PI_2, 3.0],
+            ]))
+            .with_coord_system(cyl),
+        )
+        .unwrap();
+        let g = discretize(&s, &DiscretizeOptions::default()).unwrap();
+        assert_eq!(
+            g.pec[2].iter().filter(|&&b| b).count(),
+            3,
+            "{:?}",
+            g.warnings
+        );
+        for k in 0..3 {
+            assert!(g.pec[2][g.index([0, 1, k])]);
+        }
+        assert_eq!(g.pec[0].iter().filter(|&&b| b).count(), 0);
+
+        // A thin wire defined the same way through the inherited system.
+        let mut s = ContinuousStructure::new();
+        grid(&mut s, [&l, &l, &l]);
+        let id = s.add_property(Property::metal("w"));
+        let mut w = Primitive::new(Wire::new(
+            [[2.0, 0.0, 1.0], [2.0, core::f64::consts::FRAC_PI_2, 1.0]],
+            0.0,
+        ));
+        w.coord_system = Some(cyl);
+        s.add_primitive(id, w).unwrap();
+        let g = discretize(&s, &DiscretizeOptions::default()).unwrap();
+        // staircase from (2,0,1) to (0,2,1): 2 x steps and 2 y steps
+        assert_eq!(
+            g.pec[0].iter().filter(|&&b| b).count(),
+            2,
+            "{:?}",
+            g.warnings
+        );
+        assert_eq!(g.pec[1].iter().filter(|&&b| b).count(), 2);
+        assert_eq!(g.pec[2].iter().filter(|&&b| b).count(), 0);
     }
 }

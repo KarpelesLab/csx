@@ -282,14 +282,15 @@ fn to_cylindrical_points(prim: &Primitive) -> Primitive {
 fn primitive_coord_system_semantics() {
     // As observed in CSXCAD: round shapes (spheres, cylinders, their shells,
     // wires) take their defining points in the primitive's coordinate
-    // system; multi-boxes, polygons and polyhedra are always Cartesian.
+    // system; polygons and polyhedra are always Cartesian and multi-boxes
+    // use the structure's coordinate system (Cartesian here).
     let mut rng = Lcg(13);
     for iter in 0..400 {
         let kind = 2 + iter % (SOLID_KINDS - 2);
         let prim = random_shape(&mut rng, kind);
         let cyl = to_cylindrical_points(&prim);
         let probe = prim.bounding_box(CoordSystem::Cartesian).expanded(0.3);
-        let pb = cyl.bounding_box(CoordSystem::Cylindrical).expanded(0.3);
+        let pb = cyl.bounding_box(CoordSystem::Cartesian).expanded(0.3);
         assert!(
             (probe.min - pb.min).norm() < 1e-9 && (probe.max - pb.max).norm() < 1e-9,
             "kind {kind}: {probe:?} vs {pb:?}"

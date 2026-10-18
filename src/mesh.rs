@@ -169,17 +169,19 @@ fn primitive_lines(
     let aligned = prim.transform.is_empty() || axis_aligned(prim.transform.matrix());
     // Exact bounds in the mesh coordinate system always contribute.
     add_bbox(&prim.bounding_box_in(cs, default_cs), cs, lines);
-    // Boxes in their own (matching) coordinate system are fully described
-    // by their bounds; everything else may contribute interior lines when
-    // the mapping keeps axes aligned.
+    // Boxes and multi-boxes whose values are not Cartesian (sectors, ρ/α/z
+    // ranges) are fully described by their bounds; everything else may
+    // contribute interior lines when the mapping keeps axes aligned.
+    // Point-defined shapes are converted to Cartesian first.
     if !aligned
-        || (pcs != CoordSystem::Cartesian
+        || (prim.shape_cs(default_cs) != CoordSystem::Cartesian
             && matches!(prim.shape, Shape::Box(_) | Shape::MultiBox(_)))
     {
         return;
     }
+    let shape = prim.shape.to_cartesian(pcs);
     let mut pts: Vec<Vec3> = Vec::new();
-    match &prim.shape {
+    match &*shape {
         Shape::Box(b) => pts.extend([b.start.value(), b.stop.value()]),
         Shape::MultiBox(m) => m
             .boxes
@@ -390,7 +392,7 @@ impl MeshBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::{BoxShape, Cylinder, Polygon};
+    use crate::primitives::{BoxShape, Cylinder, Polygon, Sphere, Wire};
     use crate::properties::{Excitation, Material, Property, PropertyKind};
     use core::f64::consts::PI;
 
@@ -558,5 +560,40 @@ mod tests {
         // rotated box contributes its bounding box only
         assert!(has(&e[0], -(0.5f64).sqrt()) && has(&e[1], 2f64.sqrt()));
         assert!(MeshBuilder::new(MeshOptions::new(0.0)).build(&s).is_err());
+    }
+
+    #[test]
+    fn cylindrical_point_defined_shapes() {
+        // Cartesian mesh, primitives defined in cylindrical coordinates.
+        let cyl = CoordSystem::Cylindrical;
+        let mut s = ContinuousStructure::new();
+        let m = s.add_property(Property::metal("m"));
+        s.add_primitive(
+            m,
+            Primitive::new(Sphere::new([2.0, PI / 2.0, 1.0], 0.5)).with_coord_system(cyl),
+        )
+        .unwrap();
+        s.add_primitive(
+            m,
+            Primitive::new(Cylinder::new([3.0, PI, 0.0], [3.0, PI, 4.0], 0.25))
+                .with_coord_system(cyl),
+        )
+        .unwrap();
+        s.add_primitive(
+            m,
+            Primitive::new(Wire::new([[1.0, 0.0, 0.0], [1.0, PI / 2.0, 0.0]], 0.0))
+                .with_coord_system(cyl),
+        )
+        .unwrap();
+        let l = detect_edges(&s, TypeMask::ANY, CoordSystem::Cartesian);
+        let has = |d: usize, v: f64| l[d].iter().any(|x| (x - v).abs() < 1e-9);
+        // sphere centre (0, 2, 1)
+        assert!(has(0, 0.0) && has(1, 2.0) && has(2, 1.0));
+        // cylinder axis at (-3, 0)
+        assert!(has(0, -3.0) && has(1, 0.0) && has(2, 4.0));
+        // wire vertices (1, 0, 0) and (0, 1, 0)
+        assert!(has(0, 1.0) && has(1, 1.0));
+        // no raw (rho, alpha) values leaked in
+        assert!(!has(1, PI / 2.0) && !has(1, PI));
     }
 }
