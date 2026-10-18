@@ -13,7 +13,7 @@ use super::geom::REL_TOL;
 /// hits on typical CAD meshes unlikely.
 const RAY_DIRS: [[f64; 3]; 3] = [
     [
-        0.577_215_664_901_532_9,
+        core::f64::consts::EULER_GAMMA,
         0.618_033_988_749_894_8,
         0.533_402_669_220_018_2,
     ],

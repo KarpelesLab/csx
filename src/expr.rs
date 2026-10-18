@@ -1019,7 +1019,7 @@ mod bessel {
     use core::f64::consts::{FRAC_PI_4, PI};
 
     /// Euler–Mascheroni constant.
-    const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+    use core::f64::consts::EULER_GAMMA;
     /// Switch-over between power series and asymptotic expansion.
     const SERIES_LIMIT: f64 = 12.0;
 
