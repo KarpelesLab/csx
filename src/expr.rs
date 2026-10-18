@@ -15,6 +15,11 @@
 //! * constants `pi` and `e` (overridable by variables / parameters)
 //!
 //! Booleans are `1` / `0`; any non-zero value is *true* (NaN is false).
+//!
+//! Expressions compile to flat postfix programs evaluated with an explicit
+//! value stack, so there is no limit on nesting depth (memory use is linear
+//! in the input length) and evaluating a [`CompiledExpr`] does not allocate
+//! for typical expressions.
 
 use std::collections::BTreeSet;
 
@@ -194,188 +199,180 @@ fn bool_val(b: bool) -> f64 {
     if b { 1.0 } else { 0.0 }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum Node {
+/// One instruction of the postfix program an expression compiles to.
+///
+/// Expressions are stored as flat programs evaluated with a value stack, so
+/// parsing, evaluation and dropping never recurse and nesting depth is only
+/// limited by memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Op {
+    /// Push a constant.
     Num(f64),
-    Name(String),
-    Slot(usize),
-    Unary(UnOp, Box<Node>),
-    Binary(BinOp, Box<Node>, Box<Node>),
-    /// Left-to-right chain `first op1 n1 op2 n2 ...`, i.e.
-    /// `((first op1 n1) op2 n2) ...`; keeps long operator chains shallow.
-    Chain(Box<Node>, Vec<(BinOp, Node)>),
-    Call(Func, Vec<Node>),
+    /// Push the value of a named variable (index into the name table).
+    Name(u32),
+    /// Push a positional variable of a compiled expression.
+    Slot(u32),
+    /// Unary operator on the top of the stack.
+    Unary(UnOp),
+    /// Binary operator on the two topmost values.
+    Bin(BinOp),
+    /// Function call on the topmost `arity` values (never `if`).
+    Call(Func),
+    /// `&`: if the top is false, replace it by `0` and jump; else pop it.
+    AndJump(u32),
+    /// `|`: if the top is true, replace it by `1` and jump; else pop it.
+    OrJump(u32),
+    /// Replace the top by its truth value (`1` / `0`).
+    ToBool,
+    /// Pop the top and jump if it is false (`if` condition).
+    JumpIfFalse(u32),
+    /// Unconditional jump.
+    Jump(u32),
 }
 
-impl Node {
-    fn eval(&self, slots: &[f64], lookup: &mut dyn FnMut(&str) -> Option<f64>) -> Result<f64> {
-        Ok(match self {
-            Node::Num(v) => *v,
-            Node::Slot(i) => slots[*i],
-            Node::Name(n) => match lookup(n) {
-                Some(v) => v,
-                None => builtin_constant(n).ok_or_else(|| Error::UnknownVariable(n.clone()))?,
-            },
-            Node::Unary(op, a) => {
-                let a = a.eval(slots, lookup)?;
-                match op {
-                    UnOp::Neg => -a,
-                    UnOp::Not => bool_val(!truthy(a)),
-                }
-            }
-            Node::Binary(op, a, b) => {
-                let a = a.eval(slots, lookup)?;
-                // Short-circuit logic operators.
-                match op {
-                    BinOp::And if !truthy(a) => return Ok(0.0),
-                    BinOp::Or if truthy(a) => return Ok(1.0),
-                    _ => {}
-                }
-                let b = b.eval(slots, lookup)?;
-                binop(*op, a, b)
-            }
-            Node::Chain(first, rest) => {
-                let mut acc = first.eval(slots, lookup)?;
-                for (op, n) in rest {
-                    acc = match op {
-                        BinOp::And if !truthy(acc) => 0.0,
-                        BinOp::Or if truthy(acc) => 1.0,
-                        _ => binop(*op, acc, n.eval(slots, lookup)?),
-                    };
-                }
-                acc
-            }
-            Node::Call(Func::If, args) => {
-                if truthy(args[0].eval(slots, lookup)?) {
-                    args[1].eval(slots, lookup)?
-                } else {
-                    args[2].eval(slots, lookup)?
-                }
-            }
-            Node::Call(f, args) => {
-                let mut vals = [0.0; 3];
-                for (v, a) in vals.iter_mut().zip(args) {
-                    *v = a.eval(slots, lookup)?;
-                }
-                f.apply(&vals[..args.len()])
-            }
-        })
-    }
-
-    /// Evaluates a node that contains only numbers and slots.
-    fn eval_fast(&self, slots: &[f64]) -> f64 {
+impl Func {
+    fn arity(self) -> usize {
         match self {
-            Node::Num(v) => *v,
-            Node::Slot(i) => slots[*i],
-            Node::Name(_) => f64::NAN,
-            Node::Unary(UnOp::Neg, a) => -a.eval_fast(slots),
-            Node::Unary(UnOp::Not, a) => bool_val(!truthy(a.eval_fast(slots))),
-            Node::Binary(op, a, b) => {
-                let a = a.eval_fast(slots);
-                match op {
-                    BinOp::And if !truthy(a) => 0.0,
-                    BinOp::Or if truthy(a) => 1.0,
-                    _ => binop(*op, a, b.eval_fast(slots)),
-                }
+            Func::Atan2 | Func::Hypot | Func::Jn | Func::Max | Func::Min | Func::Pow | Func::Yn => {
+                2
             }
-            Node::Chain(first, rest) => {
-                let mut acc = first.eval_fast(slots);
-                for (op, n) in rest {
-                    acc = match op {
-                        BinOp::And if !truthy(acc) => 0.0,
-                        BinOp::Or if truthy(acc) => 1.0,
-                        _ => binop(*op, acc, n.eval_fast(slots)),
-                    };
-                }
-                acc
-            }
-            Node::Call(Func::If, args) => {
-                if truthy(args[0].eval_fast(slots)) {
-                    args[1].eval_fast(slots)
-                } else {
-                    args[2].eval_fast(slots)
-                }
-            }
-            Node::Call(f, args) => {
-                let mut vals = [0.0; 3];
-                for (v, a) in vals.iter_mut().zip(args) {
-                    *v = a.eval_fast(slots);
-                }
-                f.apply(&vals[..args.len()])
-            }
+            Func::If => 3,
+            _ => 1,
         }
-    }
-
-    fn collect_names<'a>(&'a self, out: &mut BTreeSet<&'a str>) {
-        match self {
-            Node::Name(n) => {
-                out.insert(n);
-            }
-            Node::Unary(_, a) => a.collect_names(out),
-            Node::Binary(_, a, b) => {
-                a.collect_names(out);
-                b.collect_names(out);
-            }
-            Node::Chain(first, rest) => {
-                first.collect_names(out);
-                rest.iter().for_each(|(_, n)| n.collect_names(out));
-            }
-            Node::Call(_, args) => args.iter().for_each(|a| a.collect_names(out)),
-            Node::Num(_) | Node::Slot(_) => {}
-        }
-    }
-
-    /// Replaces names by slots or constants, folding constant sub-trees.
-    fn resolve(&self, vars: &[&str], lookup: &mut dyn FnMut(&str) -> Option<f64>) -> Result<Node> {
-        Ok(match self {
-            Node::Num(v) => Node::Num(*v),
-            Node::Slot(i) => Node::Slot(*i),
-            Node::Name(n) => {
-                if let Some(i) = vars.iter().position(|v| v == n) {
-                    Node::Slot(i)
-                } else if let Some(v) = lookup(n).or_else(|| builtin_constant(n)) {
-                    Node::Num(v)
-                } else {
-                    return Err(Error::UnknownVariable(n.clone()));
-                }
-            }
-            Node::Unary(op, a) => fold(Node::Unary(*op, Box::new(a.resolve(vars, lookup)?))),
-            Node::Binary(op, a, b) => fold(Node::Binary(
-                *op,
-                Box::new(a.resolve(vars, lookup)?),
-                Box::new(b.resolve(vars, lookup)?),
-            )),
-            Node::Chain(first, rest) => fold(Node::Chain(
-                Box::new(first.resolve(vars, lookup)?),
-                rest.iter()
-                    .map(|(op, n)| Ok((*op, n.resolve(vars, lookup)?)))
-                    .collect::<Result<_>>()?,
-            )),
-            Node::Call(f, args) => fold(Node::Call(
-                *f,
-                args.iter()
-                    .map(|a| a.resolve(vars, lookup))
-                    .collect::<Result<_>>()?,
-            )),
-        })
     }
 }
 
-fn fold(n: Node) -> Node {
-    let constant = match &n {
-        Node::Unary(_, a) => matches!(**a, Node::Num(_)),
-        Node::Binary(_, a, b) => matches!(**a, Node::Num(_)) && matches!(**b, Node::Num(_)),
-        Node::Chain(a, rest) => {
-            matches!(**a, Node::Num(_)) && rest.iter().all(|(_, n)| matches!(n, Node::Num(_)))
+/// A postfix program plus the stack depth it needs.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Program {
+    code: Vec<Op>,
+    max_stack: usize,
+}
+
+/// Values kept on the machine stack before falling back to the heap.
+const INLINE_STACK: usize = 32;
+
+impl Program {
+    /// Computes the maximum stack depth. Code is structured (jumps only go
+    /// forward and every branch leaves the same depth), so a single pass
+    /// suffices.
+    fn finish(code: Vec<Op>) -> Program {
+        let mut at: Vec<Option<usize>> = vec![None; code.len() + 1];
+        let (mut d, mut max) = (0usize, 0usize);
+        for (i, op) in code.iter().enumerate() {
+            if let Some(v) = at[i] {
+                d = v;
+            }
+            match *op {
+                Op::Num(_) | Op::Name(_) | Op::Slot(_) => d += 1,
+                Op::Unary(_) | Op::ToBool => {}
+                Op::Bin(_) => d -= 1,
+                Op::Call(f) => d = d + 1 - f.arity(),
+                Op::AndJump(t) | Op::OrJump(t) => {
+                    at[t as usize] = Some(d);
+                    d -= 1;
+                }
+                Op::JumpIfFalse(t) => {
+                    d -= 1;
+                    at[t as usize] = Some(d);
+                }
+                Op::Jump(t) => at[t as usize] = Some(d),
+            }
+            max = max.max(d);
         }
-        Node::Call(_, args) => args.iter().all(|a| matches!(a, Node::Num(_))),
-        _ => false,
-    };
-    if constant {
-        Node::Num(n.eval_fast(&[]))
-    } else {
-        n
+        Program {
+            code,
+            max_stack: max,
+        }
     }
+
+    /// Runs the program; `name` resolves [`Op::Name`] operands and aborts
+    /// the evaluation by returning `None`.
+    #[inline]
+    fn run<F>(&self, slots: &[f64], name: F) -> Option<f64>
+    where
+        F: FnMut(u32) -> Option<f64>,
+    {
+        // Small programs get a small buffer: zeroing it is part of every
+        // evaluation.
+        if self.max_stack <= 8 {
+            let mut buf = [0.0f64; 8];
+            exec(&self.code, slots, &mut buf, name)
+        } else if self.max_stack <= INLINE_STACK {
+            let mut buf = [0.0f64; INLINE_STACK];
+            exec(&self.code, slots, &mut buf, name)
+        } else {
+            let mut buf = vec![0.0f64; self.max_stack];
+            exec(&self.code, slots, &mut buf, name)
+        }
+    }
+}
+
+#[inline]
+fn exec<F>(code: &[Op], slots: &[f64], st: &mut [f64], mut name: F) -> Option<f64>
+where
+    F: FnMut(u32) -> Option<f64>,
+{
+    let mut sp = 0usize;
+    let mut pc = 0usize;
+    while let Some(op) = code.get(pc) {
+        match *op {
+            Op::Num(v) => {
+                st[sp] = v;
+                sp += 1;
+            }
+            Op::Slot(i) => {
+                st[sp] = slots.get(i as usize).copied().unwrap_or(0.0);
+                sp += 1;
+            }
+            Op::Name(i) => {
+                st[sp] = name(i)?;
+                sp += 1;
+            }
+            Op::Unary(UnOp::Neg) => st[sp - 1] = -st[sp - 1],
+            Op::Unary(UnOp::Not) => st[sp - 1] = bool_val(!truthy(st[sp - 1])),
+            Op::Bin(b) => {
+                sp -= 1;
+                st[sp - 1] = binop(b, st[sp - 1], st[sp]);
+            }
+            Op::Call(f) => {
+                let n = f.arity();
+                let r = f.apply(&st[sp - n..sp]);
+                sp -= n - 1;
+                st[sp - 1] = r;
+            }
+            Op::AndJump(t) => {
+                if !truthy(st[sp - 1]) {
+                    st[sp - 1] = 0.0;
+                    pc = t as usize;
+                    continue;
+                }
+                sp -= 1;
+            }
+            Op::OrJump(t) => {
+                if truthy(st[sp - 1]) {
+                    st[sp - 1] = 1.0;
+                    pc = t as usize;
+                    continue;
+                }
+                sp -= 1;
+            }
+            Op::ToBool => st[sp - 1] = bool_val(truthy(st[sp - 1])),
+            Op::JumpIfFalse(t) => {
+                sp -= 1;
+                if !truthy(st[sp]) {
+                    pc = t as usize;
+                    continue;
+                }
+            }
+            Op::Jump(t) => {
+                pc = t as usize;
+                continue;
+            }
+        }
+        pc += 1;
+    }
+    Some(if sp > 0 { st[sp - 1] } else { f64::NAN })
 }
 
 fn binop(op: BinOp, a: f64, b: f64) -> f64 {
@@ -409,25 +406,30 @@ fn builtin_constant(name: &str) -> Option<f64> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     src: String,
-    root: Node,
+    prog: Program,
+    names: Vec<String>,
 }
 
 impl Expr {
-    /// Parses `src`.
+    /// Parses `src`. There is no limit on nesting depth: parsing and
+    /// evaluation use explicit stacks, so memory use is linear in the input
+    /// length.
     pub fn parse(src: &str) -> Result<Expr> {
-        let mut p = Parser {
-            src,
-            pos: 0,
-            rec: 0,
-        };
-        let (root, _) = p.parse_expr(0)?;
-        p.skip_ws();
-        if p.pos != src.len() {
-            return Err(p.err("unexpected trailing input"));
-        }
+        let mut names: Vec<String> = Vec::new();
+        let code = Parser::new(src).parse(&mut |n: &str| {
+            let i = match names.iter().position(|m| m == n) {
+                Some(i) => i,
+                None => {
+                    names.push(n.to_owned());
+                    names.len() - 1
+                }
+            };
+            Ok(Op::Name(i as u32))
+        })?;
         Ok(Expr {
             src: src.to_owned(),
-            root,
+            prog: Program::finish(code),
+            names,
         })
     }
 
@@ -438,15 +440,24 @@ impl Expr {
 
     /// Names referenced by the expression (excluding function names).
     pub fn names(&self) -> BTreeSet<&str> {
-        let mut s = BTreeSet::new();
-        self.root.collect_names(&mut s);
-        s
+        self.names.iter().map(String::as_str).collect()
     }
 
     /// Evaluates the expression; names are resolved by `lookup`, falling
-    /// back to the built-in constants.
+    /// back to the built-in constants. Names are only resolved when they are
+    /// actually evaluated (e.g. in the taken branch of `if`).
     pub fn eval_with(&self, mut lookup: impl FnMut(&str) -> Option<f64>) -> Result<f64> {
-        self.root.eval(&[], &mut lookup)
+        let mut missing = 0;
+        self.prog
+            .run(&[], |i| {
+                let n = &self.names[i as usize];
+                let v = lookup(n).or_else(|| builtin_constant(n));
+                if v.is_none() {
+                    missing = i;
+                }
+                v
+            })
+            .ok_or_else(|| Error::UnknownVariable(self.names[missing as usize].clone()))
     }
 
     /// Evaluates an expression without any variables.
@@ -456,15 +467,25 @@ impl Expr {
 
     /// Compiles the expression for fast repeated evaluation. Names listed in
     /// `vars` become positional arguments of [`CompiledExpr::eval`]; all other
-    /// names are resolved once through `lookup` (then built-in constants).
+    /// names are resolved once through `lookup` (then built-in constants) and
+    /// constant sub-expressions are folded. Every name must resolve, even in
+    /// branches that are never taken.
     pub fn compile(
         &self,
         vars: &[&str],
         mut lookup: impl FnMut(&str) -> Option<f64>,
     ) -> Result<CompiledExpr> {
+        let code = Parser::new(&self.src).parse(&mut |n: &str| {
+            if let Some(i) = vars.iter().position(|v| *v == n) {
+                Ok(Op::Slot(i as u32))
+            } else if let Some(v) = lookup(n).or_else(|| builtin_constant(n)) {
+                Ok(Op::Num(v))
+            } else {
+                Err(Error::UnknownVariable(n.to_owned()))
+            }
+        })?;
         Ok(CompiledExpr {
-            root: self.root.resolve(vars, &mut lookup)?,
-            arity: vars.len(),
+            prog: Program::finish(code),
         })
     }
 }
@@ -486,48 +507,157 @@ impl core::fmt::Display for Expr {
 /// to constants; see [`Expr::compile`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledExpr {
-    root: Node,
-    arity: usize,
+    prog: Program,
 }
 
 impl CompiledExpr {
     /// Evaluates with the given variable values (in the order passed to
-    /// [`Expr::compile`]). Missing values are treated as `0`.
+    /// [`Expr::compile`]). Missing values are treated as `0`. Does not
+    /// allocate unless the expression needs more than 32 stack slots.
+    #[inline]
     pub fn eval(&self, vars: &[f64]) -> f64 {
-        if vars.len() >= self.arity {
-            self.root.eval_fast(vars)
-        } else {
-            let mut v = vars.to_vec();
-            v.resize(self.arity, 0.0);
-            self.root.eval_fast(&v)
+        if let [Op::Num(v)] = self.prog.code[..] {
+            return v;
         }
+        self.prog.run(vars, |_| Some(f64::NAN)).unwrap_or(f64::NAN)
     }
 
     /// The constant value, if the expression does not depend on any variable.
     pub fn as_constant(&self) -> Option<f64> {
-        match self.root {
-            Node::Num(v) => Some(v),
+        match self.prog.code[..] {
+            [Op::Num(v)] => Some(v),
             _ => None,
         }
     }
 }
 
-/// Maximum nesting depth of expressions (parser recursion and tree depth).
-///
-/// Parsing, evaluation and dropping of expression trees are recursive, so
-/// untrusted input is bounded to keep stack use small (well below 1 MiB
-/// even in debug builds). Each parenthesis level counts twice; chains of
-/// binary operators such as `a+b+c+...` are stored flat and count once
-/// regardless of their length.
-pub const MAX_DEPTH: usize = 256;
+/// Pending operator on the parser's operator stack.
+enum Pending {
+    /// Binary operator; for `&` / `|` the index of the emitted jump and
+    /// whether the left operand was a foldable constant.
+    Bin {
+        op: BinOp,
+        prec: u8,
+        jump: usize,
+        fold_lhs: bool,
+    },
+    Unary(UnOp),
+    Paren,
+    /// Function call in progress.
+    Call {
+        f: Func,
+        start: usize,
+        argc: usize,
+        /// `if`: index of the conditional jump / end jump, and (when the
+        /// condition is a foldable constant) the folding barrier before it.
+        jumps: [usize; 2],
+        fold_cond: Option<usize>,
+    },
+}
+
+/// Precedence of the prefix operators `-` and `!` (between `*` and `^`).
+const UNARY_PREC: u8 = 6;
+
+/// Code emitter with constant folding.
+struct Emitter {
+    code: Vec<Op>,
+    /// No folding may consume instructions before this index (a jump lands
+    /// there).
+    barrier: usize,
+}
+
+impl Emitter {
+    fn num_at(&self, i: usize) -> Option<f64> {
+        if i < self.barrier {
+            return None;
+        }
+        match self.code.get(i) {
+            Some(Op::Num(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn unary(&mut self, op: UnOp) {
+        let n = self.code.len();
+        if let Some(a) = n.checked_sub(1).and_then(|i| self.num_at(i)) {
+            self.code[n - 1] = Op::Num(match op {
+                UnOp::Neg => -a,
+                UnOp::Not => bool_val(!truthy(a)),
+            });
+        } else {
+            self.code.push(Op::Unary(op));
+        }
+    }
+
+    fn bin(&mut self, op: BinOp) {
+        let n = self.code.len();
+        if n >= 2
+            && let (Some(a), Some(b)) = (self.num_at(n - 2), self.num_at(n - 1))
+        {
+            self.code.truncate(n - 2);
+            self.code.push(Op::Num(binop(op, a, b)));
+        } else {
+            self.code.push(Op::Bin(op));
+        }
+    }
+
+    fn call(&mut self, f: Func) {
+        let n = self.code.len();
+        let k = f.arity();
+        if n >= k {
+            let mut args = [0.0; 3];
+            if (0..k).all(|j| match self.num_at(n - k + j) {
+                Some(v) => {
+                    args[j] = v;
+                    true
+                }
+                None => false,
+            }) {
+                self.code.truncate(n - k);
+                self.code.push(Op::Num(f.apply(&args[..k])));
+                return;
+            }
+        }
+        self.code.push(Op::Call(f));
+    }
+
+    /// Points the jump at `at` to the current end.
+    fn patch(&mut self, at: usize) {
+        let here = self.code.len() as u32;
+        match &mut self.code[at] {
+            Op::AndJump(t) | Op::OrJump(t) | Op::JumpIfFalse(t) | Op::Jump(t) => *t = here,
+            _ => unreachable!("not a jump"),
+        }
+        self.barrier = self.barrier.max(self.code.len());
+    }
+
+    /// Completes `lhs & rhs` / `lhs | rhs` whose jump is at `jump`.
+    fn finish_logic(&mut self, op: BinOp, jump: usize, fold_lhs: bool) {
+        let n = self.code.len();
+        if fold_lhs
+            && n == jump + 2
+            && let (Some(Op::Num(a)), Some(b)) =
+                (self.code.get(jump - 1).copied(), self.num_at(n - 1))
+        {
+            self.code.truncate(jump - 1);
+            self.code.push(Op::Num(binop(op, a, b)));
+            return;
+        }
+        self.code.push(Op::ToBool);
+        self.patch(jump);
+    }
+}
 
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
-    rec: usize,
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
+    fn new(src: &'a str) -> Self {
+        Parser { src, pos: 0 }
+    }
+
     fn err(&self, msg: &str) -> Error {
         Error::Parse {
             expr: self.src.to_owned(),
@@ -554,7 +684,7 @@ impl Parser<'_> {
         self.src.as_bytes().get(self.pos + 1).copied()
     }
 
-    /// Reads a binary operator (without consuming it) and its binding power.
+    /// Reads a binary operator (without consuming it) and its precedence.
     fn peek_binop(&mut self) -> Option<(BinOp, u8, usize)> {
         self.skip_ws();
         let c = self.peek()?;
@@ -579,179 +709,241 @@ impl Parser<'_> {
         })
     }
 
-    /// Guards parser recursion (parentheses, unary chains, ...).
-    fn enter(&mut self) -> Result<()> {
-        self.rec += 1;
-        if self.rec > MAX_DEPTH {
-            return Err(self.err("expression nested too deeply"));
+    /// Emits the code for a popped operator.
+    fn reduce(em: &mut Emitter, p: Pending) {
+        match p {
+            Pending::Unary(op) => em.unary(op),
+            Pending::Bin {
+                op: op @ (BinOp::And | BinOp::Or),
+                jump,
+                fold_lhs,
+                ..
+            } => em.finish_logic(op, jump, fold_lhs),
+            Pending::Bin { op, .. } => em.bin(op),
+            Pending::Paren | Pending::Call { .. } => unreachable!("not an operator"),
         }
-        Ok(())
     }
 
-    /// Builds a node of depth `depth`, rejecting trees deeper than
-    /// [`MAX_DEPTH`] (evaluation and drop are recursive).
-    fn node(&self, node: Node, depth: usize) -> Result<(Node, usize)> {
-        if depth > MAX_DEPTH {
-            return Err(self.err("expression nested too deeply"));
-        }
-        Ok((node, depth))
-    }
-
-    fn parse_expr(&mut self, min_bp: u8) -> Result<(Node, usize)> {
-        self.enter()?;
-        let (lhs, mut d) = self.parse_unary()?;
-        // Every operator consumed by this loop applies to the accumulated
-        // left-hand side, so the sequence is stored as a flat chain that is
-        // evaluated left to right.
-        let mut rest = Vec::new();
-        while let Some((op, bp, len)) = self.peek_binop() {
-            if bp < min_bp {
+    /// Pops operators that bind at least as tightly as an incoming binary
+    /// operator of precedence `prec` (`^` is right associative).
+    fn reduce_for(em: &mut Emitter, ops: &mut Vec<Pending>, prec: u8, right_assoc: bool) {
+        while let Some(top) = ops.last() {
+            let top_prec = match top {
+                Pending::Bin { prec, .. } => *prec,
+                Pending::Unary(_) => UNARY_PREC,
+                Pending::Paren | Pending::Call { .. } => break,
+            };
+            if top_prec > prec || (top_prec == prec && !right_assoc) {
+                let p = ops.pop().expect("non-empty");
+                Self::reduce(em, p);
+            } else {
                 break;
             }
-            self.pos += len;
-            // `^` is right associative; everything else left associative.
-            let (rhs, rd) = if op == BinOp::Pow {
-                self.parse_pow_rhs()?
-            } else {
-                self.parse_expr(bp + 1)?
-            };
-            d = d.max(rd);
-            rest.push((op, rhs));
-        }
-        self.rec -= 1;
-        match rest.len() {
-            0 => Ok((lhs, d)),
-            1 => {
-                let (op, rhs) = rest.pop().expect("one element");
-                self.node(Node::Binary(op, Box::new(lhs), Box::new(rhs)), d + 1)
-            }
-            _ => self.node(Node::Chain(Box::new(lhs), rest), d + 1),
         }
     }
 
-    /// Right-hand side of `^`: allows a unary sign (`2^-1`) and is right
-    /// associative.
-    fn parse_pow_rhs(&mut self) -> Result<(Node, usize)> {
-        self.enter()?;
-        self.skip_ws();
-        let r = match self.peek() {
-            Some(b'-') => {
-                self.pos += 1;
-                let (n, d) = self.parse_pow_rhs()?;
-                self.node(Node::Unary(UnOp::Neg, Box::new(n)), d + 1)
-            }
-            Some(b'+') => {
-                self.pos += 1;
-                self.parse_pow_rhs()
-            }
-            _ => {
-                let base = self.parse_atom()?;
-                self.maybe_pow(base)
-            }
+    /// Pops all operators down to the nearest parenthesis / call marker.
+    fn reduce_group(em: &mut Emitter, ops: &mut Vec<Pending>) {
+        while matches!(ops.last(), Some(Pending::Bin { .. } | Pending::Unary(_))) {
+            let p = ops.pop().expect("non-empty");
+            Self::reduce(em, p);
+        }
+    }
+
+    /// Parses the whole input into postfix code; `name` maps identifiers to
+    /// an operand instruction.
+    fn parse(mut self, name: &mut dyn FnMut(&str) -> Result<Op>) -> Result<Vec<Op>> {
+        let mut em = Emitter {
+            code: Vec::new(),
+            barrier: 0,
         };
-        self.rec -= 1;
-        r
-    }
-
-    fn maybe_pow(&mut self, base: (Node, usize)) -> Result<(Node, usize)> {
-        self.skip_ws();
-        if self.peek() == Some(b'^') {
-            self.pos += 1;
-            let (e, d) = self.parse_pow_rhs()?;
-            self.node(
-                Node::Binary(BinOp::Pow, Box::new(base.0), Box::new(e)),
-                base.1.max(d) + 1,
-            )
-        } else {
-            Ok(base)
-        }
-    }
-
-    fn parse_unary(&mut self) -> Result<(Node, usize)> {
-        self.enter()?;
-        self.skip_ws();
-        let r = match self.peek() {
-            Some(b'-') => {
-                self.pos += 1;
-                let (n, d) = self.parse_unary()?;
-                self.node(Node::Unary(UnOp::Neg, Box::new(n)), d + 1)
-            }
-            Some(b'+') => {
-                self.pos += 1;
-                self.parse_unary()
-            }
-            Some(b'!') if self.peek2() != Some(b'=') => {
-                self.pos += 1;
-                let (n, d) = self.parse_unary()?;
-                self.node(Node::Unary(UnOp::Not, Box::new(n)), d + 1)
-            }
-            _ => {
-                let a = self.parse_atom()?;
-                self.maybe_pow(a)
-            }
-        };
-        self.rec -= 1;
-        r
-    }
-
-    fn parse_atom(&mut self) -> Result<(Node, usize)> {
-        self.skip_ws();
-        let start = self.pos;
-        match self.peek() {
-            None => Err(self.err("unexpected end of expression")),
-            Some(b'(') => {
-                self.pos += 1;
-                let e = self.parse_expr(0)?;
-                self.expect(b')')?;
-                Ok(e)
-            }
-            Some(c) if c.is_ascii_digit() || c == b'.' => Ok((self.parse_number(start)?, 1)),
-            Some(c) if c.is_ascii_alphabetic() || c == b'_' => {
-                while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == b'_') {
-                    self.pos += 1;
-                }
-                let name = &self.src[start..self.pos];
-                self.skip_ws();
-                if self.peek() == Some(b'(') {
-                    let Some((f, arity)) = Func::lookup(name) else {
-                        self.pos = start;
-                        return Err(self.err(&format!("unknown function {name:?}")));
-                    };
-                    self.pos += 1;
-                    let mut args = Vec::with_capacity(arity);
-                    let mut depth = 0;
-                    self.skip_ws();
-                    if self.peek() != Some(b')') {
-                        loop {
-                            let (a, d) = self.parse_expr(0)?;
-                            args.push(a);
-                            depth = depth.max(d);
+        let mut ops: Vec<Pending> = Vec::new();
+        let mut expect_operand = true;
+        loop {
+            self.skip_ws();
+            if expect_operand {
+                let start = self.pos;
+                match self.peek() {
+                    None => return Err(self.err("unexpected end of expression")),
+                    Some(b'(') => {
+                        self.pos += 1;
+                        ops.push(Pending::Paren);
+                    }
+                    Some(b'-') => {
+                        self.pos += 1;
+                        ops.push(Pending::Unary(UnOp::Neg));
+                    }
+                    Some(b'+') => self.pos += 1,
+                    Some(b'!') if self.peek2() != Some(b'=') => {
+                        self.pos += 1;
+                        ops.push(Pending::Unary(UnOp::Not));
+                    }
+                    Some(c) if c.is_ascii_digit() || c == b'.' => {
+                        let v = self.parse_number(start)?;
+                        em.code.push(Op::Num(v));
+                        expect_operand = false;
+                    }
+                    Some(c) if c.is_ascii_alphabetic() || c == b'_' => {
+                        while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == b'_')
+                        {
+                            self.pos += 1;
+                        }
+                        let id = &self.src[start..self.pos];
+                        self.skip_ws();
+                        if self.peek() == Some(b'(') {
+                            let Some((f, _)) = Func::lookup(id) else {
+                                self.pos = start;
+                                return Err(self.err(&format!("unknown function {id:?}")));
+                            };
+                            self.pos += 1;
+                            ops.push(Pending::Call {
+                                f,
+                                start,
+                                argc: 0,
+                                jumps: [0; 2],
+                                fold_cond: None,
+                            });
                             self.skip_ws();
-                            if self.peek() == Some(b',') && args.len() < arity {
-                                self.pos += 1;
-                            } else {
-                                break;
+                            if self.peek() == Some(b')') {
+                                self.pos = start;
+                                let arity = f.arity();
+                                return Err(self.err(&format!(
+                                    "function {id:?} expects {arity} argument(s), got 0"
+                                )));
                             }
+                        } else {
+                            em.code.push(name(id)?);
+                            expect_operand = false;
                         }
                     }
-                    self.expect(b')')?;
-                    if args.len() != arity {
-                        self.pos = start;
-                        return Err(self.err(&format!(
-                            "function {name:?} expects {arity} argument(s), got {}",
-                            args.len()
-                        )));
-                    }
-                    self.node(Node::Call(f, args), depth + 1)
-                } else {
-                    Ok((Node::Name(name.to_owned()), 1))
+                    Some(_) => return Err(self.err("unexpected character")),
                 }
+                continue;
             }
-            Some(_) => Err(self.err("unexpected character")),
+            // Operator position.
+            if let Some((op, prec, len)) = self.peek_binop() {
+                self.pos += len;
+                Self::reduce_for(&mut em, &mut ops, prec, op == BinOp::Pow);
+                let mut pending = Pending::Bin {
+                    op,
+                    prec,
+                    jump: 0,
+                    fold_lhs: false,
+                };
+                if let Pending::Bin { jump, fold_lhs, .. } = &mut pending
+                    && matches!(op, BinOp::And | BinOp::Or)
+                {
+                    let n = em.code.len();
+                    *fold_lhs = n >= 1 && em.num_at(n - 1).is_some();
+                    *jump = n;
+                    em.code.push(if op == BinOp::And {
+                        Op::AndJump(0)
+                    } else {
+                        Op::OrJump(0)
+                    });
+                }
+                ops.push(pending);
+                expect_operand = true;
+                continue;
+            }
+            match self.peek() {
+                None => break,
+                Some(b',') => {
+                    Self::reduce_group(&mut em, &mut ops);
+                    let Some(Pending::Call {
+                        f,
+                        argc,
+                        jumps,
+                        fold_cond,
+                        ..
+                    }) = ops.last_mut()
+                    else {
+                        return Err(self.err("unexpected trailing input"));
+                    };
+                    *argc += 1;
+                    if *argc >= f.arity() {
+                        return Err(self.err("expected ')'"));
+                    }
+                    if *f == Func::If {
+                        let n = em.code.len();
+                        if *argc == 1 {
+                            *fold_cond =
+                                (n >= 1 && em.num_at(n - 1).is_some()).then_some(em.barrier);
+                            jumps[0] = n;
+                            em.code.push(Op::JumpIfFalse(0));
+                        } else {
+                            jumps[1] = n;
+                            em.code.push(Op::Jump(0));
+                            let j = jumps[0];
+                            em.patch(j);
+                        }
+                    }
+                    self.pos += 1;
+                    expect_operand = true;
+                }
+                Some(b')') => {
+                    Self::reduce_group(&mut em, &mut ops);
+                    match ops.pop() {
+                        Some(Pending::Paren) => {}
+                        Some(Pending::Call {
+                            f,
+                            start,
+                            argc,
+                            jumps,
+                            fold_cond,
+                        }) => {
+                            let argc = argc + 1;
+                            if argc != f.arity() {
+                                self.pos = start;
+                                return Err(self.err(&format!(
+                                    "function expects {} argument(s), got {argc}",
+                                    f.arity()
+                                )));
+                            }
+                            if f == Func::If {
+                                Self::finish_if(&mut em, jumps, fold_cond);
+                            } else {
+                                em.call(f);
+                            }
+                        }
+                        _ => return Err(self.err("unexpected ')'")),
+                    }
+                    self.pos += 1;
+                }
+                Some(_) => return Err(self.err("unexpected trailing input")),
+            }
         }
+        Self::reduce_group(&mut em, &mut ops);
+        if !ops.is_empty() {
+            return Err(self.err("expected ')'"));
+        }
+        Ok(em.code)
     }
 
-    fn parse_number(&mut self, start: usize) -> Result<Node> {
+    /// Completes `if(c, a, b)`; folds it when all three parts are constant.
+    fn finish_if(em: &mut Emitter, jumps: [usize; 2], fold_cond: Option<usize>) {
+        let [jz, jmp] = jumps;
+        let n = em.code.len();
+        if let Some(barrier) = fold_cond
+            && jmp == jz + 2
+            && n == jmp + 2
+            && let (Some(Op::Num(c)), Some(Op::Num(a)), Some(Op::Num(b))) = (
+                em.code.get(jz - 1).copied(),
+                em.code.get(jz + 1).copied(),
+                em.code.get(jmp + 1).copied(),
+            )
+        {
+            em.code.truncate(jz - 1);
+            em.code.push(Op::Num(if truthy(c) { a } else { b }));
+            // The patched conditional jump raised the barrier past the
+            // folded code; restore the barrier from before the `if`.
+            em.barrier = barrier;
+            return;
+        }
+        em.patch(jmp);
+    }
+
+    fn parse_number(&mut self, start: usize) -> Result<f64> {
         let b = self.src.as_bytes();
         let mut i = self.pos;
         while i < b.len() && b[i].is_ascii_digit() {
@@ -776,23 +968,10 @@ impl Parser<'_> {
             }
         }
         self.pos = i;
-        self.src[start..i]
-            .parse::<f64>()
-            .map(Node::Num)
-            .map_err(|_| {
-                self.pos = start;
-                self.err("invalid number")
-            })
-    }
-
-    fn expect(&mut self, c: u8) -> Result<()> {
-        self.skip_ws();
-        if self.peek() == Some(c) {
-            self.pos += 1;
-            Ok(())
-        } else {
-            Err(self.err(&format!("expected '{}'", c as char)))
-        }
+        self.src[start..i].parse::<f64>().map_err(|_| {
+            self.pos = start;
+            self.err("invalid number")
+        })
     }
 }
 
@@ -1226,6 +1405,121 @@ mod tests {
             Expr::parse("e").unwrap().eval_with(|_| Some(3.0)).unwrap(),
             3.0
         );
+    }
+
+    #[test]
+    fn precedence_corner_cases() {
+        assert_eq!(ev("2^-1*3"), 1.5);
+        assert_eq!(ev("-2^-2"), -0.25);
+        assert_eq!(ev("2^-1^2"), 0.5);
+        assert_eq!(ev("!1=0"), 1.0);
+        assert_eq!(ev("1<2<3"), 1.0);
+        assert_eq!(ev("3>2>1"), 0.0);
+        assert_eq!(ev("-3%2"), -1.0);
+        assert_eq!(ev("1 - -1"), 2.0);
+        assert_eq!(ev("+-+1"), -1.0);
+        assert_eq!(ev("1|0&0"), 1.0);
+        assert_eq!(ev("(1|0)&0"), 0.0);
+        assert_eq!(ev("2*if(1,3,4)"), 6.0);
+        assert_eq!(ev("if(0,1,2)+3"), 5.0);
+        assert_eq!(ev("if(1,if(0,5,6),7)"), 6.0);
+        assert_eq!(ev("max(if(0,1,2), 1 & 3)"), 2.0);
+    }
+
+    /// Branches and short-circuit operators mixed with variables: folding
+    /// must never merge code across a jump target.
+    #[test]
+    fn folding_respects_jumps() {
+        let cases: &[(&str, f64, f64)] = &[
+            ("if(x,1,2)+3", 0.0, 5.0),
+            ("if(x,1,2)+3", 1.0, 4.0),
+            ("3+if(x,1,2)", 0.0, 5.0),
+            ("-if(x,1,2)", 1.0, -1.0),
+            ("x&3", 2.0, 1.0),
+            ("(x&3)+1", 0.0, 1.0),
+            ("(x|0)*5", 0.0, 0.0),
+            ("(x|0)*5", 4.0, 5.0),
+            ("max(if(x,1,2),3)", 1.0, 3.0),
+            ("2*if(x,3,4)", 0.0, 8.0),
+            ("if(x,1+1,2*3)", 0.0, 6.0),
+            ("if(1,x,2)", 7.0, 7.0),
+            ("if(0,x,2)*x", 7.0, 14.0),
+            ("1 & x | 0", 0.0, 0.0),
+            ("0 & x | 2", 9.0, 1.0),
+        ];
+        for &(src, x, want) in cases {
+            let e = Expr::parse(src).unwrap();
+            assert_eq!(e.eval_with(|_| Some(x)).unwrap(), want, "{src} eval_with");
+            let c = e.compile(&["x"], |_| None).unwrap();
+            assert_eq!(c.eval(&[x]), want, "{src} compiled");
+            let k = e.compile(&[], |_| Some(x)).unwrap();
+            assert_eq!(k.as_constant(), Some(want), "{src} folded");
+        }
+    }
+
+    /// Lazily evaluated names: only the taken branch is resolved.
+    #[test]
+    fn lazy_names() {
+        let e = Expr::parse("if(1, 2, missing)").unwrap();
+        assert_eq!(e.eval_const().unwrap(), 2.0);
+        assert!(e.compile(&[], |_| None).is_err());
+        assert_eq!(
+            Expr::parse("0 & missing").unwrap().eval_const().unwrap(),
+            0.0
+        );
+        assert!(Expr::parse("1 & missing").unwrap().eval_const().is_err());
+    }
+
+    /// Random expressions: `eval_with`, compiled and fully folded evaluation
+    /// agree.
+    #[test]
+    fn differential_random() {
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut rnd = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        let atoms = ["x", "y", "0", "1", "2.5", "pi"];
+        let bins = ["+", "-", "*", "/", "^", "<", ">=", "=", "!=", "&", "|", "%"];
+        for _ in 0..3000 {
+            // Build a random expression with a small explicit stack.
+            let mut parts: Vec<String> = Vec::new();
+            for _ in 0..(2 + rnd(6)) {
+                let a = atoms[rnd(atoms.len() as u64) as usize].to_string();
+                let t = match rnd(6) {
+                    0 => format!("-{a}"),
+                    1 => format!("!{a}"),
+                    2 => format!("sin({a})"),
+                    _ => a,
+                };
+                parts.push(t);
+                while parts.len() >= 2 && rnd(3) == 0 {
+                    let b = parts.pop().unwrap();
+                    let a = parts.pop().unwrap();
+                    let op = bins[rnd(bins.len() as u64) as usize];
+                    parts.push(match rnd(4) {
+                        0 => format!("if({a},{b},{a}{op}{b})"),
+                        1 => format!("max({a},{b})"),
+                        _ => format!("({a}{op}{b})"),
+                    });
+                }
+            }
+            let src = parts.join("+");
+            let e = Expr::parse(&src).unwrap();
+            let (x, y) = (rnd(5) as f64 - 2.0, rnd(3) as f64 * 0.5);
+            let look = |n: &str| match n {
+                "x" => Some(x),
+                "y" => Some(y),
+                _ => None,
+            };
+            let a = e.eval_with(look).unwrap();
+            let b = e.compile(&["x", "y"], |_| None).unwrap().eval(&[x, y]);
+            let c = e.compile(&[], look).unwrap().as_constant().unwrap();
+            let same = |p: f64, q: f64| p == q || (p.is_nan() && q.is_nan());
+            assert!(same(a, b) && same(a, c), "{src}: {a} {b} {c}");
+        }
     }
 
     #[test]

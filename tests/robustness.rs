@@ -1,7 +1,7 @@
 //! Deterministic fuzz-style robustness tests: parsers must never panic on
 //! arbitrary input and must not allocate based on untrusted counts.
 
-use csx::expr::{Expr, MAX_DEPTH};
+use csx::expr::Expr;
 use csx::io::{ply, stl};
 
 /// Small deterministic PRNG (64-bit LCG, high bits).
@@ -71,40 +71,55 @@ fn expr_random_bytes_never_panic() {
 }
 
 #[test]
-fn expr_deep_nesting_is_rejected_not_overflowed() {
+fn expr_deep_nesting_parses_and_evaluates() {
+    // Parsing, evaluation and drop are iterative: arbitrarily deep input
+    // works on a default (2 MiB) test thread stack.
     let n = 100_000;
-    for s in [
-        format!("{}1{}", "(".repeat(n), ")".repeat(n)),
-        format!("{}1", "-".repeat(n)),
-        format!("{}1", "!".repeat(n)),
-        "2^".repeat(n) + "2",
-        "2^-".repeat(n) + "2",
-        "sin(".repeat(n) + "1" + &")".repeat(n),
-    ] {
-        assert!(Expr::parse(&s).is_err(), "{}", &s[..20]);
-    }
-    // Expressions close to the limit still parse and evaluate on a default
-    // (2 MiB) test thread stack. Each parenthesis level costs two levels of
-    // parser recursion; operator chains are flat and unbounded in length.
-    let d = MAX_DEPTH / 2 - 2;
-    let s = format!("{}x{}", "(".repeat(d), ")".repeat(d));
-    let e = Expr::parse(&s).unwrap();
-    assert_eq!(e.eval_with(|_| Some(1.0)).unwrap(), 1.0);
-    assert_eq!(e.compile(&["x"], |_| None).unwrap().eval(&[2.0]), 2.0);
-    let e = Expr::parse(&("1+".repeat(n) + "1")).unwrap();
-    assert_eq!(e.eval_const().unwrap(), (n + 1) as f64);
-    let d = MAX_DEPTH - 2;
-    let s = "x+".repeat(d) + "1";
-    let e = Expr::parse(&s).unwrap();
-    assert_eq!(e.eval_with(|_| Some(1.0)).unwrap(), (d + 1) as f64);
+    let ev = |s: &str| Expr::parse(s).unwrap().eval_const().unwrap();
+    assert_eq!(ev(&format!("{}1{}", "(".repeat(n), ")".repeat(n))), 1.0);
+    assert_eq!(ev(&format!("{}1", "-".repeat(n))), 1.0);
+    assert_eq!(ev(&format!("{}1", "-".repeat(n + 1))), -1.0);
+    assert_eq!(ev(&format!("{}1", "!".repeat(n))), 1.0);
+    assert_eq!(ev(&("2^".repeat(n) + "2")), f64::INFINITY);
+    assert!(ev(&("2^-".repeat(n) + "2")).is_finite());
+    let s = ev(&("sin(".repeat(n) + "1" + &")".repeat(n)));
+    assert!(s.abs() <= 1.0);
+    assert_eq!(ev(&("1+".repeat(n) + "1")), (n + 1) as f64);
+    assert_eq!(ev(&("if(1,".repeat(n) + "7" + &",0)".repeat(n))), 7.0);
+    assert_eq!(ev(&("(1&".repeat(n) + "1" + &")".repeat(n))), 1.0);
+
+    // The same with variables (no constant folding possible).
+    let vars = |s: &str, x: f64| {
+        let e = Expr::parse(s).unwrap();
+        let c = e.compile(&["x"], |_| None).unwrap();
+        let a = e.eval_with(|_| Some(x)).unwrap();
+        let b = c.eval(&[x]);
+        assert!(a == b || (a.is_nan() && b.is_nan()), "{a} vs {b}");
+        a
+    };
     assert_eq!(
-        e.compile(&["x"], |_| None).unwrap().eval(&[1.0]),
-        (d + 1) as f64
+        vars(&format!("{}x{}", "(".repeat(n), ")".repeat(n)), 2.0),
+        2.0
     );
-    let e = Expr::parse(&("1+".repeat(d) + "1")).unwrap();
+    assert_eq!(vars(&format!("{}x", "-".repeat(n + 1)), 2.0), -2.0);
+    assert_eq!(vars(&("x+".repeat(n) + "1"), 1.0), (n + 1) as f64);
+    assert_eq!(
+        vars(&("if(x,".repeat(n) + "x" + &",0)".repeat(n)), 3.0),
+        3.0
+    );
+    assert_eq!(vars(&("(x|".repeat(n) + "x" + &")".repeat(n)), 0.0), 0.0);
+    assert_eq!(vars(&("max(x,".repeat(n) + "1" + &")".repeat(n)), 5.0), 5.0);
+    // Right-nested sums need a deep value stack (heap fallback).
+    assert_eq!(
+        vars(&("x+(".repeat(n) + "x" + &")".repeat(n)), 1.0),
+        (n + 1) as f64
+    );
+
+    // Folding still collapses deep constant expressions.
+    let e = Expr::parse(&("(1+".repeat(n) + "1" + &")".repeat(n))).unwrap();
     assert_eq!(
         e.compile(&[], |_| None).unwrap().as_constant(),
-        Some((d + 1) as f64)
+        Some((n + 1) as f64)
     );
 }
 
