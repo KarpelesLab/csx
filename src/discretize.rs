@@ -89,6 +89,16 @@
 //! mask. Sheets, lumped elements and line-like primitives that do not
 //! coincide with mesh lines produce warnings in [`MaterialGrid::warnings`].
 
+//!
+//! # Memory
+//!
+//! A [`MaterialGrid`] is 111 bytes per node: twelve `f64` material arrays
+//! and the masks. A solver that stores the materials in its own layout
+//! can leave the arrays out ([`DiscretizeOptions::without_materials`]) and
+//! take them one direction at a time ([`edge_materials`],
+//! [`face_materials`]: 16 bytes per node while it converts them), with
+//! the same values.
+
 use crate::coords::CoordSystem;
 use crate::error::{Error, Result};
 use crate::grid::RectilinearGrid;
@@ -111,6 +121,11 @@ pub struct DiscretizeOptions {
     /// Relative snapping tolerance: a sheet or line coordinate is on a mesh
     /// line when it is within `snap_tolerance × local cell size`.
     pub snap_tolerance: f64,
+    /// Whether [`discretize`] fills the material arrays
+    /// ([`MaterialGrid::epsilon`], `kappa`, `mue`, `sigma`). Without them
+    /// they are empty and the result holds the masks and lists only; see
+    /// [`DiscretizeOptions::without_materials`].
+    pub materials: bool,
 }
 
 impl Default for DiscretizeOptions {
@@ -119,11 +134,49 @@ impl Default for DiscretizeOptions {
             subsampling: 1,
             threads: 0,
             snap_tolerance: 1e-6,
+            materials: true,
         }
     }
 }
 
 impl DiscretizeOptions {
+    /// Builder: leaves the material arrays of the [`MaterialGrid`] empty.
+    ///
+    /// The twelve arrays are 96 of the 111 bytes [`discretize`] returns
+    /// per node. A caller that takes them one direction at a time
+    /// ([`edge_materials`], [`face_materials`]), or needs the PEC mask
+    /// and the lists only, holds much less at once:
+    ///
+    /// ```
+    /// use csx::discretize::{DiscretizeOptions, discretize, edge_materials};
+    /// use csx::primitives::BoxShape;
+    /// use csx::properties::Material;
+    /// use csx::{ContinuousStructure, Property};
+    ///
+    /// let mut s = ContinuousStructure::new();
+    /// let d = s.add_property(Property::material("diel", Material::new(4.0, 0.0)));
+    /// s.add_primitive(d, BoxShape::new([0.0, 0.0, 0.0], [2.0, 2.0, 1.0]))?;
+    /// for dir in 0..3 {
+    ///     s.grid.set_lines(dir, [0.0, 1.0, 2.0])?;
+    /// }
+    /// let opts = DiscretizeOptions::default().with_threads(1);
+    /// let whole = discretize(&s, &opts)?;
+    /// let masks = discretize(&s, &opts.clone().without_materials())?;
+    /// assert!(masks.epsilon[0].is_empty());
+    /// assert_eq!(masks.pec, whole.pec);
+    /// // The same values, one direction at a time.
+    /// let x = edge_materials(&s, &opts, 0)?;
+    /// assert_eq!(x.len(), whole.len());
+    /// assert!(x.iter().zip(&whole.epsilon[0]).all(|(e, w)| e[0] == *w));
+    /// assert!(x.iter().zip(&whole.kappa[0]).all(|(e, w)| e[1] == *w));
+    /// # Ok::<(), csx::Error>(())
+    /// ```
+    #[must_use]
+    pub fn without_materials(mut self) -> Self {
+        self.materials = false;
+        self
+    }
+
     /// Builder: sub-samples per axis and quarter / half cell.
     #[must_use]
     pub fn with_subsampling(mut self, n: usize) -> Self {
@@ -213,7 +266,9 @@ pub struct MaterialGrid {
     pub dims: [usize; 3],
     /// Coordinate system of the grid.
     pub coord_system: CoordSystem,
-    /// Relative permittivity per E edge.
+    /// Relative permittivity per E edge. This and the three arrays below
+    /// are empty when the grid was made
+    /// [without materials](DiscretizeOptions::without_materials).
     pub epsilon: [Vec<f64>; 3],
     /// Electric conductivity per E edge.
     pub kappa: [Vec<f64>; 3],
@@ -310,47 +365,8 @@ pub const MAX_NODES: usize = (u32::MAX as usize).saturating_add(1);
 /// [`DiscretizeOptions::subsampling`] is outside `1..=`[`MAX_SUBSAMPLING`],
 /// or if the grid has more than [`MAX_NODES`] nodes.
 pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<MaterialGrid> {
-    let dims = s.grid.num_lines();
-    if dims.contains(&0) {
-        return Err(Error::Invalid(
-            "discretize: the grid has an axis without lines".into(),
-        ));
-    }
-    if opts.subsampling == 0 || opts.subsampling > MAX_SUBSAMPLING {
-        return Err(Error::Invalid(format!(
-            "discretize: subsampling must be in 1..={MAX_SUBSAMPLING}"
-        )));
-    }
-    let cs = s.grid.coord_system;
-    let ctx = Ctx {
-        s,
-        g: &s.grid,
-        cs,
-        dims,
-        index: s.spatial_index(cs, TypeMask::MATERIALS | TypeMask::of(PropertyType::Metal)),
-        bg: [
-            s.background.epsilon.value(),
-            s.background.mue.value(),
-            s.background.kappa.value(),
-            s.background.sigma.value(),
-        ],
-        n_sub: opts.subsampling,
-        snap_tol: opts.snap_tolerance,
-    };
-    let threads = if opts.threads == 0 {
-        std::thread::available_parallelism().map_or(1, |n| n.get())
-    } else {
-        opts.threads
-    };
-    let total = dims
-        .iter()
-        .try_fold(1usize, |acc, &n| acc.checked_mul(n))
-        .filter(|&t| t <= MAX_NODES)
-        .ok_or_else(|| {
-            Error::Invalid(format!(
-                "discretize: grid {dims:?} exceeds {MAX_NODES} nodes"
-            ))
-        })?;
+    let (ctx, threads, total) = context(s, opts)?;
+    let (dims, cs) = (ctx.dims, ctx.cs);
 
     let mut out = MaterialGrid {
         dims,
@@ -368,12 +384,15 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
     };
 
     for d in 0..3 {
-        let e = ctx.par_map(threads, |idx| ctx.edge_material(d, idx));
-        out.epsilon[d] = e.iter().map(|v| v.0).collect();
-        out.kappa[d] = e.iter().map(|v| v.1).collect();
-        let h = ctx.par_map(threads, |idx| ctx.face_material(d, idx));
-        out.mue[d] = h.iter().map(|v| v.0).collect();
-        out.sigma[d] = h.iter().map(|v| v.1).collect();
+        if opts.materials {
+            let e = ctx.par_map(threads, |idx| ctx.edge_material(d, idx));
+            out.epsilon[d] = e.iter().map(|v| v.0).collect();
+            out.kappa[d] = e.iter().map(|v| v.1).collect();
+            drop(e);
+            let h = ctx.par_map(threads, |idx| ctx.face_material(d, idx));
+            out.mue[d] = h.iter().map(|v| v.0).collect();
+            out.sigma[d] = h.iter().map(|v| v.1).collect();
+        }
         let pec = ctx.par_map(threads, |idx| ctx.edge_in_solid_metal(d, idx));
         out.pec[d] = pec;
     }
@@ -506,6 +525,100 @@ pub fn discretize(s: &ContinuousStructure, opts: &DiscretizeOptions) -> Result<M
     Ok(out)
 }
 
+/// The sampling context of `s` with `opts`, the worker threads and the
+/// number of nodes, after the checks of [`discretize`].
+fn context<'a>(
+    s: &'a ContinuousStructure,
+    opts: &DiscretizeOptions,
+) -> Result<(Ctx<'a>, usize, usize)> {
+    let dims = s.grid.num_lines();
+    if dims.contains(&0) {
+        return Err(Error::Invalid(
+            "discretize: the grid has an axis without lines".into(),
+        ));
+    }
+    if opts.subsampling == 0 || opts.subsampling > MAX_SUBSAMPLING {
+        return Err(Error::Invalid(format!(
+            "discretize: subsampling must be in 1..={MAX_SUBSAMPLING}"
+        )));
+    }
+    let cs = s.grid.coord_system;
+    let ctx = Ctx {
+        s,
+        g: &s.grid,
+        cs,
+        dims,
+        index: s.spatial_index(cs, TypeMask::MATERIALS | TypeMask::of(PropertyType::Metal)),
+        bg: [
+            s.background.epsilon.value(),
+            s.background.mue.value(),
+            s.background.kappa.value(),
+            s.background.sigma.value(),
+        ],
+        n_sub: opts.subsampling,
+        snap_tol: opts.snap_tolerance,
+    };
+    let threads = if opts.threads == 0 {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        opts.threads
+    };
+    let total = dims
+        .iter()
+        .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+        .filter(|&t| t <= MAX_NODES)
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "discretize: grid {dims:?} exceeds {MAX_NODES} nodes"
+            ))
+        })?;
+    Ok((ctx, threads, total))
+}
+
+/// `[epsilon, kappa]` of every E edge along axis `dir`, one entry per
+/// node: the values [`discretize`] puts in [`MaterialGrid::epsilon`]`[dir]`
+/// and [`MaterialGrid::kappa`]`[dir]`, bit for bit, without the rest of
+/// the grid (see [`DiscretizeOptions::without_materials`]).
+///
+/// # Errors
+/// As [`discretize`]; also [`Error::Invalid`] for `dir > 2`.
+pub fn edge_materials(
+    s: &ContinuousStructure,
+    opts: &DiscretizeOptions,
+    dir: usize,
+) -> Result<Vec<[f64; 2]>> {
+    let (ctx, threads, _) = context(s, opts)?;
+    if dir > 2 {
+        return Err(Error::Invalid(format!("edge_materials: axis {dir}")));
+    }
+    Ok(ctx.par_map(threads, |idx| {
+        let (eps, kappa) = ctx.edge_material(dir, idx);
+        [eps, kappa]
+    }))
+}
+
+/// `[mue, sigma]` of every H face normal to axis `dir`, one entry per
+/// node: the values [`discretize`] puts in [`MaterialGrid::mue`]`[dir]`
+/// and [`MaterialGrid::sigma`]`[dir]`, bit for bit (see
+/// [`edge_materials`]).
+///
+/// # Errors
+/// As [`discretize`]; also [`Error::Invalid`] for `dir > 2`.
+pub fn face_materials(
+    s: &ContinuousStructure,
+    opts: &DiscretizeOptions,
+    dir: usize,
+) -> Result<Vec<[f64; 2]>> {
+    let (ctx, threads, _) = context(s, opts)?;
+    if dir > 2 {
+        return Err(Error::Invalid(format!("face_materials: axis {dir}")));
+    }
+    Ok(ctx.par_map(threads, |idx| {
+        let (mue, sigma) = ctx.face_material(dir, idx);
+        [mue, sigma]
+    }))
+}
+
 struct Ctx<'a> {
     s: &'a ContinuousStructure,
     g: &'a RectilinearGrid,
@@ -560,7 +673,15 @@ impl Ctx<'_> {
     }
 
     /// Runs `f` for every node index, splitting the work over threads.
-    fn par_map<T: Send>(&self, threads: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    /// The result is one allocation of the calling thread, which the
+    /// workers fill in place: a worker that collected its own part would
+    /// hold the grid twice for a moment, in memory the allocator keeps
+    /// with that thread.
+    fn par_map<T: Send + Copy + Default>(
+        &self,
+        threads: usize,
+        f: impl Fn(usize) -> T + Sync,
+    ) -> Vec<T> {
         let total: usize = self.dims.iter().product();
         let threads = threads.clamp(1, total.max(1));
         if threads == 1 || total < 4096 {
@@ -568,19 +689,17 @@ impl Ctx<'_> {
         }
         let chunk = total.div_ceil(threads);
         let f = &f;
+        let mut out = vec![T::default(); total];
         std::thread::scope(|sc| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let lo = (t * chunk).min(total);
-                    let hi = ((t + 1) * chunk).min(total);
-                    sc.spawn(move || (lo..hi).map(f).collect::<Vec<T>>())
-                })
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|h| h.join().expect("discretize worker panicked"))
-                .collect()
-        })
+            for (t, part) in out.chunks_mut(chunk).enumerate() {
+                sc.spawn(move || {
+                    for (k, o) in part.iter_mut().enumerate() {
+                        *o = f(t * chunk + k);
+                    }
+                });
+            }
+        });
+        out
     }
 
     /// Material at a grid-coordinate point; `None` inside metal.
@@ -1406,6 +1525,60 @@ mod tests {
         .unwrap();
         assert_eq!(one, many);
         assert!(one.pec_count() > 0);
+    }
+
+    /// The material arrays one direction at a time are the whole grid's,
+    /// bit for bit, and a grid without them is the rest of it.
+    #[test]
+    fn materials_by_direction() {
+        let mut s = ContinuousStructure::new();
+        let l = lines(19);
+        grid(&mut s, [&l, &l, &l]);
+        let id = s.add_property(Property::material("d", Material::new(3.0, 0.1)));
+        s.add_primitive(id, crate::primitives::Sphere::new([9.5, 9.5, 9.5], 6.3))
+            .unwrap();
+        let mut mag = Material::new(1.0, 0.0);
+        mag.mue = crate::properties::Aniso::iso(2.5);
+        mag.sigma = crate::properties::Aniso::iso(0.3);
+        let id = s.add_property(Property::material("mag", mag));
+        s.add_primitive(id, crate::primitives::Sphere::new([6.5, 8.5, 9.5], 4.1))
+            .unwrap();
+        let m = s.add_property(Property::metal("m"));
+        s.add_primitive(m, BoxShape::new([2.0, 2.0, 2.0], [5.0, 4.0, 3.0]))
+            .unwrap();
+        let cs = s.add_property(Property::conducting_sheet("sheet", 5.8e7, 35e-6));
+        s.add_primitive(cs, BoxShape::new([8.0, 8.0, 12.0], [14.0, 13.0, 12.0]))
+            .unwrap();
+        let opts = DiscretizeOptions::default()
+            .with_subsampling(2)
+            .with_threads(3);
+        let whole = discretize(&s, &opts).unwrap();
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        let part = |v: &[[f64; 2]], c: usize| v.iter().map(|x| x[c].to_bits()).collect::<Vec<_>>();
+        for d in 0..3 {
+            let e = edge_materials(&s, &opts, d).unwrap();
+            assert_eq!(part(&e, 0), bits(&whole.epsilon[d]));
+            assert_eq!(part(&e, 1), bits(&whole.kappa[d]));
+            let h = face_materials(&s, &opts, d).unwrap();
+            assert_eq!(part(&h, 0), bits(&whole.mue[d]));
+            assert_eq!(part(&h, 1), bits(&whole.sigma[d]));
+        }
+        assert!(whole.mue[0].iter().any(|&m| m != 1.0));
+        assert!(edge_materials(&s, &opts, 3).is_err());
+        assert!(face_materials(&s, &opts, 3).is_err());
+        let masks = discretize(&s, &opts.clone().without_materials()).unwrap();
+        assert!(masks.epsilon.iter().all(Vec::is_empty) && masks.sigma.iter().all(Vec::is_empty));
+        let mut rest = whole.clone();
+        for a in [
+            &mut rest.epsilon,
+            &mut rest.kappa,
+            &mut rest.mue,
+            &mut rest.sigma,
+        ] {
+            *a = Default::default();
+        }
+        assert_eq!(masks, rest);
+        assert!(masks.pec_count() > 0 && !masks.sheets.is_empty());
     }
 
     #[test]
